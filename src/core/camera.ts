@@ -18,7 +18,13 @@ export class CameraRig {
   private impulse = new THREE.Vector3();
   private impulseV = new THREE.Vector3();
   baseFov = 42;
-  mode: 'intro' | 'transition' | 'follow' | 'cinematic' = 'intro';
+  mode: 'intro' | 'transition' | 'follow' | 'cinematic' | 'shot' | 'fall' = 'intro';
+  shotPos = new THREE.Vector3();
+  shotLook = new THREE.Vector3();
+  shotSpeed = 1.2;
+  /** extra distance while flying (geysers) */
+  flight = 0;
+  private flightK = 0;
   private trans = 0;
   private transFromPos = new THREE.Vector3();
   private transFromLook = new THREE.Vector3();
@@ -54,6 +60,17 @@ export class CameraRig {
     this.startTransition();
   }
 
+  /** Ease towards a fixed authored shot. */
+  setShot(pos: THREE.Vector3, look: THREE.Vector3, speed = 1.2) {
+    this.mode = 'shot';
+    this.shotPos.copy(pos);
+    this.shotLook.copy(look);
+    this.shotSpeed = speed;
+  }
+
+  /** Falling off the world: hold height, track the car as it drops through the clouds. */
+  startFall() { this.mode = 'fall'; }
+
   private followPose(carPos: THREE.Vector3, vel: THREE.Vector3, outPos: THREE.Vector3, outLook: THREE.Vector3) {
     const speed = Math.hypot(vel.x, vel.z);
     // look a little ahead of where the car is heading
@@ -62,7 +79,7 @@ export class CameraRig {
     outLook.copy(carPos).add(ahead);
     outLook.y += 0.8;
     if (this.focusW > 0.001) outLook.lerp(this.focusBlend, this.focusW);
-    const d = this.dist * this.zoom * this.hintDist * (1 + clamp(speed / 30, 0, 1) * 0.18);
+    const d = this.dist * this.zoom * this.hintDist * (1 + clamp(speed / 30, 0, 1) * 0.18 + this.flightK * 0.45);
     const p = this.pitch;
     outPos.set(
       outLook.x + Math.sin(this.yaw) * Math.cos(p) * d,
@@ -73,6 +90,7 @@ export class CameraRig {
 
   update(dt: number, carPos: THREE.Vector3, vel: THREE.Vector3, forward: THREE.Vector3, drag: number[], wheel: number, introT: number) {
     const cam = this.camera;
+    this.flightK = damp(this.flightK, this.flight > 0 ? 1 : 0, this.flight > 0 ? 2.5 : 1.2, dt);
     // user input
     if (drag[0] !== 0 || drag[1] !== 0) {
       this.yaw -= drag[0] * 0.006;
@@ -124,6 +142,14 @@ export class CameraRig {
       pos.set(Math.cos(a) * 150, 72 + Math.sin(introT * 0.15) * 6, Math.sin(a) * 150);
       cam.position.copy(pos);
       this.look.copy(look);
+    } else if (this.mode === 'shot') {
+      cam.position.lerp(this.shotPos, 1 - Math.exp(-dt * this.shotSpeed));
+      this.look.lerp(this.shotLook, 1 - Math.exp(-dt * this.shotSpeed * 1.6));
+    } else if (this.mode === 'fall') {
+      // stay roughly where we are, slowly sinking, always looking at Wick
+      const want = new THREE.Vector3(cam.position.x, Math.max(carPos.y + 12, cam.position.y - dt * 14), cam.position.z);
+      cam.position.lerp(want, 1 - Math.exp(-dt * 3));
+      this.look.lerp(carPos, 1 - Math.exp(-dt * 8));
     } else if (this.mode === 'cinematic' && this.cinematic) {
       const c = this.cinematic;
       c.t += dt * c.speed;

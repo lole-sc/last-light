@@ -11,7 +11,10 @@ import { Foliage } from '../world/foliage';
 import { Atmosphere } from '../world/atmosphere';
 import { Water } from '../world/water';
 import { Structures } from '../world/structures';
-import { BEACONS, BRIDGE, BRIDGE_ANGLE, FALLS, GLIMMERS, NOTES, RUINS, SPAWN, WATER_LEVEL, PLAZA } from '../world/layout';
+import { BEACONS, BRIDGES, FALLS, GEYSERS, GLIMMERS, NOTES, OBSERVATORY, ORIEL, SPAWN, WATER_LEVEL, GRAVITY, type GeyserDef } from '../world/layout';
+import { isInsideIsland } from '../world/terrain';
+import { Dialogue, LINES } from './story';
+import { Oriel } from './oriel';
 import { Vehicle } from './vehicle';
 import { Props } from './props';
 import { Objectives, type Beacon } from './objectives';
@@ -22,7 +25,21 @@ import { UI } from '../ui/ui';
 import { clamp, smoothstep } from '../utils/math';
 
 type State = 'loading' | 'intro' | 'play' | 'paused' | 'note' | 'map' | 'finale' | 'end';
-const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
+type Chapter = 'beacons' | 'lighthouse' | 'oriel' | 'done';
+type Sky = 'story' | 'golden' | 'dusk' | 'night';
+const SKY_TOD: Record<Exclude<Sky, 'story'>, number> = { golden: 0, dusk: 0.62, night: 1 };
+const NB = BEACONS.length;
+const ARC_GLIMMERS = GLIMMERS.map((g, i) => (g[0] === 95 || g[0] === 105 ? i : -1)).filter((i) => i >= 0);
+
+/** Position along a geyser's ballistic arc at fraction s of the flight. */
+function geyserArc(g: GeyserDef, s: number, out = new THREE.Vector3()) {
+  const y0 = groundHeight(g.x, g.z) + 1.1, y1 = groundHeight(g.tx, g.tz) + 1.1;
+  const T = g.flight, t = s * T;
+  const vy = (y1 - y0) / T - 0.5 * GRAVITY * T;
+  return out.set(g.x + (g.tx - g.x) * s, y0 + vy * t + 0.5 * GRAVITY * t * t, g.z + (g.tz - g.z) * s);
+}
+// rAF, but never stall if the tab is in the background while loading
+const nextFrame = () => new Promise((r) => { requestAnimationFrame(() => r(null)); setTimeout(() => r(null), 60); });
 const LEAF_COLORS = [0xff8c5a, 0xffb052, 0xf2607a, 0xf6c453];
 const RUINS_SECRET = GLIMMERS.findIndex((g) => g[0] === -46 && g[1] === -40);
 
@@ -48,6 +65,17 @@ export class Game {
   motes = makeAmbientField(260, 50, false);
   fireflies = makeAmbientField(180, 46, true);
   shock!: THREE.Mesh;
+  dialogue!: Dialogue;
+  oriel!: Oriel;
+  chapter: Chapter = 'beacons';
+  sky: Sky = 'story';
+  finaleKind: 'lighthouse' | 'meet' | 'rise' = 'lighthouse';
+  safeSpot = { x: SPAWN.x, z: SPAWN.z, yaw: SPAWN.yaw };
+  safeTimer = 0;
+  falling = false;
+  fallT = 0;
+  geyserCooldown = 0;
+  lastProgressAt = 0;
 
   state: State = 'loading';
   time = 0;
@@ -69,7 +97,7 @@ export class Game {
   trackDist = [0, 0];
   lastWheelPos = [new THREE.Vector3(), new THREE.Vector3()];
   wasInWater = 0;
-  emitTimers = { smoke: 0, fire: 0, mist: 0, wake: 0, embers: 0, leaves: 0 };
+  emitTimers = { smoke: 0, fire: 0, mist: 0, wake: 0, embers: 0, leaves: 0, geyser: 0 };
   mushroomCooldown = 0;
   finaleT = 0;
   finished = false;
@@ -120,6 +148,13 @@ export class Game {
     this.vehicle.build(SPAWN.x, groundHeight(SPAWN.x, SPAWN.z) + 1.2, SPAWN.z, SPAWN.yaw);
     this.vehicle.waterQuery = (x, z) => this.water.depthAt(x, z, WATER_LEVEL - 0.1) > 0;
     this.scene.add(this.vehicle.root);
+    this.vehicle.setEnvironment(this.makeEnvironment());
+    this.oriel = new Oriel(ORIEL.x, ORIEL.z);
+    this.scene.add(this.oriel.root);
+    this.dialogue = new Dialogue();
+    this.dialogue.onBlip = (who) => this.audio.blip(who);
+    // glimmers that hang in the geyser's flight path
+    ARC_GLIMMERS.forEach((gi, k) => geyserArc(GEYSERS[0], 0.36 + k * 0.28, this.obj.glimmers[gi].pos));
 
     this.scene.add(this.soft.points, this.glow.points, this.tracks.mesh, this.motes, this.fireflies);
     this.shock = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 48), new THREE.MeshBasicMaterial({ color: 0xffc56b, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
@@ -133,8 +168,10 @@ export class Game {
       const fa = Math.atan2(FALLS.dirZ, FALLS.dirX) - 1.15;
       const focus = new THREE.Vector3(FALLS.x + FALLS.dirX * 5, -7, FALLS.z + FALLS.dirZ * 5);
       this.rig.hints.push({ x: FALLS.x, z: FALLS.z, r: 24, yaw: Math.atan2(Math.cos(fa), Math.sin(fa)), pitch: 0.3, dist: 1.25, focus, focusW: 0.55 });
-      const ba = BRIDGE_ANGLE + Math.PI / 2;
-      this.rig.hints.push({ x: (BRIDGE.a.x + BRIDGE.b.x) / 2, z: (BRIDGE.a.z + BRIDGE.b.z) / 2, r: 22, yaw: Math.atan2(Math.cos(ba), Math.sin(ba)), pitch: 0.5, dist: 1.2 });
+      for (const br of BRIDGES) {
+        const ba = br.angle + Math.PI / 2;
+        this.rig.hints.push({ x: (br.a.x + br.b.x) / 2, z: (br.a.z + br.b.z) / 2, r: 22, yaw: Math.atan2(Math.cos(ba), Math.sin(ba)), pitch: 0.5, dist: 1.2 });
+      }
     }
     this.applyQuality(this.quality, false);
 
@@ -172,7 +209,8 @@ export class Game {
       setTimeout(() => {
         this.vehicle.enabled = true;
         this.ui.showHud(true);
-        this.ui.toast('Find the first beacon — follow the glowing marker', 4200);
+        this.lastProgressAt = this.time;
+        this.dialogue.say(LINES.intro, 'intro');
       }, 1700);
     };
     this.input.anyKeyListeners.push((code) => {
@@ -209,12 +247,17 @@ export class Game {
       this.rig.endCinematic();
       this.audio.uiClose();
     });
+    document.querySelectorAll<HTMLButtonElement>('#seg-sky button').forEach((b) => b.addEventListener('click', () => {
+      this.setSky(b.dataset.sky as Sky); this.audio.click();
+    }));
     this.syncSoundUI();
     this.ui.setQualityButtons(this.quality);
+    this.ui.setSkyButtons(this.sky);
     this.startGame = start;
   }
 
   private onKey(code: string) {
+    if (code === 'Enter' && (this.state === 'finale' || this.nearNote < 0)) this.dialogue.skip();
     if (this.state === 'note') {
       if (code === 'KeyE' || code === 'Escape' || code === 'Enter' || code === 'Space') this.closeNote();
       return;
@@ -224,7 +267,8 @@ export class Game {
     if (this.state === 'end') return;
     if (code === 'Escape' || code === 'KeyP') this.togglePause();
     else if (code === 'KeyM') this.toggleMap();
-    else if (code === 'KeyR' && this.state === 'play') this.respawn();
+    else if (code === 'KeyR' && this.state === 'play') this.resetCar();
+    else if (code === 'KeyT') { const order: Sky[] = ['story', 'golden', 'dusk', 'night']; this.setSky(order[(order.indexOf(this.sky) + 1) % 4], true); }
     else if (code === 'KeyH') this.ui.toggleControls();
     else if (code === 'KeyN') this.toggleSound();
     else if ((code === 'KeyE' || code === 'Enter') && this.state === 'play' && this.nearNote >= 0) this.openNote(this.nearNote);
@@ -246,7 +290,7 @@ export class Game {
     if (this.state === 'play') {
       this.state = 'map';
       const f = this.vehicle.forward();
-      this.ui.drawMap(this.vehicle.position, Math.atan2(f.x, f.z), this.obj.beacons.map((b) => b.lit), this.obj.litCount === 5, this.obj.finale.lit, this.notesRead);
+      this.ui.drawMap(this.vehicle.position, Math.atan2(f.x, f.z), this.obj.beacons.map((b) => b.lit), this.obj.litCount === NB, this.obj.finale.lit, this.notesRead, this.chapter === 'oriel' || this.chapter === 'done');
       this.ui.show('map', true);
       this.audio.uiOpen();
     } else if (this.state === 'map') {
@@ -264,6 +308,31 @@ export class Game {
     this.state = 'play';
     this.ui.hideNote();
     this.audio.uiClose();
+  }
+
+  setSky(sky: Sky, announce = false) {
+    this.sky = sky;
+    this.ui.setSkyButtons(sky);
+    if (announce) this.ui.toast(sky === 'story' ? 'Sky follows the story' : `Sky: ${sky}`);
+  }
+  private skyTarget() { return this.sky === 'story' ? this.todTarget : SKY_TOD[this.sky]; }
+
+  /** A tiny gradient environment so Wick's clear-coat has something to reflect. */
+  private makeEnvironment() {
+    const pm = new THREE.PMREMGenerator(this.renderer.renderer);
+    const s = new THREE.Scene();
+    s.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `varying vec3 vP; void main(){ float y = normalize(vP).y;
+        vec3 top = vec3(0.32, 0.42, 0.8), hor = vec3(1.0, 0.62, 0.42), bot = vec3(0.22, 0.2, 0.28);
+        vec3 c = y > 0.0 ? mix(hor, top, pow(y, 0.6)) : mix(hor * 0.6, bot, pow(-y, 0.5));
+        c += vec3(1.0, 0.8, 0.5) * pow(max(dot(normalize(vP), normalize(vec3(-0.8, 0.35, 0.45))), 0.0), 40.0) * 3.0;
+        gl_FragColor = vec4(c, 1.0); }`,
+    })));
+    const tex = pm.fromScene(s, 0.02).texture;
+    pm.dispose();
+    return tex;
   }
 
   applyQuality(q: QualityName, announce: boolean) {
@@ -368,17 +437,22 @@ export class Game {
     const v = this.vehicle;
     const p = v.position;
     uniforms.uPlayer.value.copy(p);
+    this.dialogue.update(dt);
 
-    // time of day eases towards the progress target
-    this.tod += (this.todTarget - this.tod) * Math.min(1, dt * 0.45);
-    if (Math.abs(this.todTarget - this.tod) > 0.0005) this.applyTimeOfDay();
+    // time of day eases towards the story progress (or the player's chosen sky)
+    const target = this.skyTarget();
+    this.tod += (target - this.tod) * Math.min(1, dt * (this.sky === 'story' ? 0.45 : 1.6));
+    if (Math.abs(target - this.tod) > 0.0005) this.applyTimeOfDay();
 
     if (this.state === 'finale') this.updateFinale(dt);
+    if (this.oriel.root.visible) this.oriel.update(dt, p, uniforms.uNight.value);
     if (this.state !== 'play') return;
 
-    // ---- beacons
+    if (this.falling) { this.updateFall(dt); this.updateHud(); return; }
+
+    // ---- beacons (+ the lighthouse ring once all six burn)
     let kindling = false;
-    const list: Beacon[] = this.obj.litCount === 5 ? [...this.obj.beacons, this.obj.finale] : this.obj.beacons;
+    const list: Beacon[] = this.chapter === 'lighthouse' ? [this.obj.finale] : this.chapter === 'beacons' ? this.obj.beacons : [];
     for (const b of list) {
       if (b.lit) continue;
       const d = Math.hypot(p.x - b.pos.x, p.z - b.pos.z);
@@ -387,6 +461,7 @@ export class Game {
         const before = b.progress;
         b.progress = Math.min(1, b.progress + dt / 1.15);
         kindling = true;
+        this.dialogue.say(LINES.kindleFirst, 'kindle');
         if (Math.floor(before * 8) !== Math.floor(b.progress * 8)) this.audio.kindleTick(b.progress);
         if (Math.random() < 0.6) this.glow.emit({ pos: b.pos.clone().add(new THREE.Vector3(0, 2.9, 0)), vel: new THREE.Vector3(0, 2, 0), spread: 1.5, life: 0.8, size: 0.14, color: 0xffb347, gravity: -1 });
         if (b.progress >= 1) this.lightBeacon(b);
@@ -400,7 +475,7 @@ export class Game {
     for (let i = 0; i < this.obj.glimmers.length; i++) {
       const g = this.obj.glimmers[i];
       if (g.taken || (i === RUINS_SECRET && !this.secretRevealed)) continue;
-      if (g.pos.distanceTo(p) < 2.1) this.takeGlimmer(i);
+      if (g.pos.distanceTo(p) < 2.3) this.takeGlimmer(i);
     }
 
     // ---- notes
@@ -429,8 +504,47 @@ export class Game {
       }
     }
 
-    // ---- fell off the island?
-    if (p.y < -14 && !this.respawning) this.respawn(true);
+    // ---- wind geysers
+    this.geyserCooldown -= dt;
+    for (const g of GEYSERS) {
+      const d = Math.hypot(p.x - g.x, p.z - g.z);
+      if (d < 16) this.dialogue.say(LINES.geyserFirst, 'geyser');
+      if (d < 2.5 && p.y < groundHeight(g.x, g.z) + 2.6 && this.geyserCooldown <= 0 && v.launched <= 0) this.launch(g);
+    }
+    this.rig.flight = v.launched;
+
+    // ---- story triggers
+    if (this.structures.bridges.some((b) => b.project(p) >= 0)) this.dialogue.say(LINES.bridgeFirst, 'bridge');
+    const dObs = Math.hypot(p.x - OBSERVATORY.x, p.z - OBSERVATORY.z);
+    if (this.chapter === 'beacons' && dObs < 16) this.dialogue.say(LINES.observatoryEarly, 'obs-early');
+    if (this.chapter === 'oriel' && Math.hypot(p.x - ORIEL.x, p.z - ORIEL.z) < 6) this.startMeet();
+    if (v.stuckTime > 2.5) this.dialogue.say(LINES.stuck, 'stuck');
+    if (v.unstuck) {
+      v.unstuck = false;
+      this.audio.respawn();
+      this.soft.emit({ pos: p.clone(), spread: 5, count: 20, life: 0.8, size: 0.6, sizeEnd: 1.5, color: 0xfff1d8, alpha: 0.6, drag: 3 });
+    }
+    if (this.chapter === 'beacons' && this.time - this.lastProgressAt > 80 && !this.dialogue.busy) this.dialogue.say(LINES.idle, 'idle');
+    if (v.balloonPopped) {
+      v.balloonPopped = false;
+      this.audio.pop();
+      this.glow.emit({ pos: p.clone().add(new THREE.Vector3(0, 3.6, 0)), spread: 8, count: 40, life: 1.2, size: 0.2, color: 0xffe0a0, color2: 0xe8634e, gravity: 6, shape: 2 });
+      this.soft.emit({ pos: p.clone().add(new THREE.Vector3(0, 3.6, 0)), spread: 6, count: 30, life: 2, size: 0.25, color: 0xe8634e, color2: 0xfff1d8, gravity: 4, drag: 1.5, shape: 1 });
+      this.dialogue.say(LINES.rescued, 'rescued');
+    }
+
+    // ---- remember the last safe spot (for rescues)
+    this.safeTimer -= dt;
+    if (this.safeTimer <= 0) {
+      this.safeTimer = 0.5;
+      if (v.grounded === 4 && v.inWater === 0 && v.launched <= 0 && isInsideIsland(p.x, p.z, 5) && !GEYSERS.some((g) => Math.hypot(p.x - g.x, p.z - g.z) < 7) && !this.structures.bridges.some((b) => b.project(p) >= 0)) {
+        const f = v.forward();
+        this.safeSpot = { x: p.x, z: p.z, yaw: Math.atan2(f.x, f.z) };
+      }
+    }
+
+    // ---- fell off the world?
+    if (p.y < -8 && v.launched <= 0 && !v.balloonActive && !this.respawning) this.startFall();
     this.props.recover();
 
     // ---- landing
@@ -443,6 +557,7 @@ export class Game {
       for (const w of v.wheelStates) if (w.contact) this.dust(w.point, 6 * k, 1.4);
     }
     if (v.justJumped) { this.audio.jump(); for (const w of v.wheelStates) if (w.contact) this.dust(w.point, 4, 1.0); }
+    if (v.boostKick > 0.55) { this.audio.boost(); this.rig.kick(v.forward().multiplyScalar(-1), 2.5); this.rig.addShake(0.15); }
 
     // ---- water entry
     if (v.inWater > 0 && this.wasInWater === 0) {
@@ -454,13 +569,90 @@ export class Game {
     }
     this.wasInWater = v.inWater;
 
+    this.ui.setSpeedLines((v.boosting && Math.abs(v.speed) > 25) || v.launched > 0.3);
     this.updateHud();
   }
 
+  // ---------------------------------------------------------- geysers
+  private launch(g: GeyserDef) {
+    const v = this.vehicle;
+    const c = v.chassis;
+    const t = c.translation();
+    const y1 = groundHeight(g.tx, g.tz) + 1.1;
+    const T = g.flight;
+    const vx = ((g.tx - t.x) / T) * 1.035, vz = ((g.tz - t.z) / T) * 1.035;
+    const vy = (y1 - t.y) / T - 0.5 * GRAVITY * T;
+    const yaw = Math.atan2(vx, vz);
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    c.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+    c.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    c.setLinvel({ x: vx, y: vy, z: vz }, true);
+    v.launched = T + 0.25;
+    this.geyserCooldown = 1.6;
+    this.audio.geyser();
+    this.rig.addShake(0.4);
+    const base = new THREE.Vector3(g.x, groundHeight(g.x, g.z) + 0.3, g.z);
+    this.soft.emit({ pos: base, vel: new THREE.Vector3(0, 14, 0), spread: 5, posSpread: 2.5, count: 60, life: 1.1, size: 0.7, sizeEnd: 2.2, color: 0xffffff, color2: 0xcfe9ff, alpha: 0.55, drag: 1.6 });
+    this.glow.emit({ pos: base, vel: new THREE.Vector3(0, 10, 0), spread: 6, count: 30, life: 0.8, size: 0.12, color: 0xbfe8ff, gravity: 2 });
+  }
+
+  // ----------------------------------------------------------- falling
+  private startFall() {
+    this.falling = true;
+    this.fallT = 0;
+    this.vehicle.enabled = false;
+    this.rig.startFall();
+    this.audio.fallWind();
+    this.dialogue.say(LINES.fallFirst, 'fall', true);
+  }
+
+  private updateFall(dt: number) {
+    this.fallT += dt;
+    const p = this.vehicle.position;
+    // punching through the cloud sea
+    if (p.y < -26 && Math.random() < 0.7) {
+      this.soft.emit({ pos: p, posSpread: 5, vel: new THREE.Vector3(0, 6, 0), spread: 4, count: 3, life: 1.6, size: 2.2, sizeEnd: 5, color: 0xffffff, color2: this.atmo.current.cloudLit, alpha: 0.6, drag: 1 });
+    }
+    if ((p.y < -40 || this.fallT > 3.2) && !this.respawning) {
+      this.respawning = true;
+      this.ui.fade(true);
+      setTimeout(() => this.rescue(), 500);
+    }
+  }
+
+  /** The lantern inflates into a balloon and floats Wick back down onto solid ground. */
+  private rescue() {
+    const s = this.safeSpot;
+    const gy = groundHeight(s.x, s.z);
+    this.vehicle.respawn(s.x, gy + 12, s.z, s.yaw);
+    this.vehicle.startBalloon();
+    this.vehicle.enabled = true;
+    this.falling = false;
+    this.rig.mode = 'follow';
+    this.rig.camera.position.set(s.x - Math.sin(s.yaw) * 26, gy + 26, s.z - Math.cos(s.yaw) * 26);
+    this.rig.yaw = Math.atan2(-Math.sin(s.yaw), -Math.cos(s.yaw));
+    this.audio.inflate();
+    this.ui.fade(false);
+    this.respawning = false;
+  }
+
+  /** R: back on the wheels where you are (or a rescue if you're nowhere). */
+  private resetCar() {
+    if (this.falling || this.respawning) return;
+    const p = this.vehicle.position;
+    if (isInsideIsland(p.x, p.z, -0.5) && p.y > -4) {
+      this.vehicle.resetInPlace();
+      this.audio.respawn();
+      this.soft.emit({ pos: p.clone(), spread: 5, count: 24, life: 0.9, size: 0.6, sizeEnd: 1.6, color: 0xfff1d8, alpha: 0.6, drag: 3 });
+    } else this.startFall();
+  }
+
+  // ----------------------------------------------------------- beacons
   private lightBeacon(b: Beacon) {
     b.lit = true;
     b.litAt = this.time;
     b.progress = 1;
+    this.lastProgressAt = this.time;
     const isFinale = b === this.obj.finale;
     this.checkpoint = { x: b.pos.x, z: b.pos.z + 5, yaw: Math.PI };
     const top = b.pos.clone().add(new THREE.Vector3(0, 3.0, 0));
@@ -472,59 +664,112 @@ export class Game {
     this.rig.addShake(0.6);
     this.rig.kick(new THREE.Vector3(0, 1, 0), 3);
     this.audio.ignite(this.obj.litCount);
-    this.audio.intensity = this.obj.litCount / 5;
+    this.audio.intensity = Math.min(1, this.obj.litCount / NB);
     for (const l of this.structures.lamps) if (Math.hypot(l.x - b.pos.x, l.z - b.pos.z) < 48) l.target = 1;
 
-    if (isFinale) {
-      this.startFinale();
-      return;
-    }
+    if (isFinale) { this.startLighthouse(); return; }
     const n = this.obj.litCount;
-    this.todTarget = (n / 5) * 0.9;
+    this.todTarget = (n / NB) * 0.9;
     const place = b.def.name.replace(' Beacon', '');
-    const lines = ['burns again', 'is awake', 'remembers the light', 'is glowing', 'answers'];
-    this.ui.banner(`Beacon ${n} of 5`, `The ${place} ${lines[(n - 1) % lines.length]}`);
-    if (n === 5) {
+    const verbs = ['burns again', 'is awake', 'remembers the light', 'is glowing', 'answers', 'sings in the wind'];
+    this.ui.banner(`Beacon ${n} of ${NB}`, `The ${place} ${verbs[(n - 1) % verbs.length]}`);
+    this.dialogue.say(LINES.lit[Math.min(n, NB) - 1], undefined, true);
+    if (n === NB) {
+      this.chapter = 'lighthouse';
       this.obj.finale.ring.visible = true;
       this.obj.finale.marker.visible = true;
-      setTimeout(() => this.ui.banner('All five are burning', 'Now, the lighthouse', 4200), 3900);
+      setTimeout(() => this.ui.banner('All six are burning', 'Now, the lighthouse', 4200), 3900);
     }
   }
 
-  private startFinale() {
+  // ----------------------------------------------------------- finales
+  private startLighthouse() {
     this.state = 'finale';
+    this.finaleKind = 'lighthouse';
     this.ui.setKindle(false);
     this.ui.setPrompt(null);
-    this.finished = true;
     this.finaleT = 0;
     this.vehicle.enabled = false;
-    this.todTarget = 1;
+    this.todTarget = 0.97;
     this.audio.finale();
-    this.ui.banner('the lighthouse answers', 'Last Light', 5200);
+    this.ui.banner('the lighthouse is lit', 'Last Light', 4600);
     this.structures.lighthouseBeam.visible = true;
     this.rig.startCinematic(this.structures.lighthouseTop.clone().add(new THREE.Vector3(0, -6, 0)), 34, 14, 0.22);
     for (const l of this.structures.lamps) l.target = 1;
+    this.dialogue.say(LINES.lighthouse, 'lighthouse', true);
+  }
+
+  private startMeet() {
+    this.state = 'finale';
+    this.finaleKind = 'meet';
+    this.finaleT = 0;
+    this.vehicle.enabled = false;
+    this.ui.setPrompt(null);
+    const o = new THREE.Vector3(ORIEL.x, groundHeight(ORIEL.x, ORIEL.z), ORIEL.z);
+    const car = this.vehicle.position.clone();
+    const mid = o.clone().lerp(car, 0.45).add(new THREE.Vector3(0, 1.3, 0));
+    const away = car.clone().sub(o).setY(0).normalize();
+    const side = new THREE.Vector3(-away.z, 0, away.x);
+    // frame both of them from the open side of the islet, a little above
+    const isl = new THREE.Vector3(OBSERVATORY.x, 0, OBSERVATORY.z);
+    const outward = mid.clone().setY(0).sub(isl).normalize();
+    const camDir = side.clone().multiplyScalar(Math.sign(side.dot(outward)) || 1).add(outward.multiplyScalar(0.6)).normalize();
+    this.rig.setShot(mid.clone().addScaledVector(camDir, 13).add(new THREE.Vector3(0, 5.5, 0)), mid.clone().add(new THREE.Vector3(0, -0.4, 0)), 1.2);
+    this.dialogue.say(LINES.meet, 'meet', true);
   }
 
   private updateFinale(dt: number) {
     this.finaleT += dt;
     const t = this.finaleT;
-    const lamp = this.structures.lighthouseLamp.material as THREE.MeshStandardMaterial;
-    lamp.emissiveIntensity = Math.min(9, t * 3);
-    const beamMat = (this.structures.lighthouseBeam.children[0] as THREE.Mesh).material as THREE.ShaderMaterial;
-    beamMat.uniforms.uOpacity.value = Math.min(0.55, t * 0.3);
-    // fireworks of embers over the isle
-    if (t < 9 && Math.random() < dt * 3) {
-      const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * 40;
-      const pos = new THREE.Vector3(Math.cos(a) * r, 26 + Math.random() * 14, -8 + Math.sin(a) * r);
-      const cols = [[0xffd27a, 0xff7a3a], [0xffc2d6, 0xff6a8a], [0xbfe8ff, 0x8fb0ff], [0xfff4c0, 0xffd27a]][Math.floor(Math.random() * 4)];
-      this.glow.emit({ pos, spread: 16, count: 90, life: 1.6, size: 0.35, sizeEnd: 0.05, color: cols[0], color2: cols[1], gravity: 4, drag: 1.4 });
-      this.audio.noise({ dur: 0.5, vol: 0.12, freq: 900, sweep: 200 });
+    if (this.finaleKind === 'lighthouse') {
+      const lamp = this.structures.lighthouseLamp.material as THREE.MeshStandardMaterial;
+      lamp.emissiveIntensity = Math.min(9, t * 3);
+      const beamMat = (this.structures.lighthouseBeam.children[0] as THREE.Mesh).material as THREE.ShaderMaterial;
+      beamMat.uniforms.uOpacity.value = Math.min(0.55, t * 0.3);
+      if (t < 5) this.fireworks(dt, new THREE.Vector3(0, 0, -8), 40);
+      if (t > 4.6 && this.rig.mode !== 'shot') {
+        // the answer: a lantern blinks on the Observatory isle
+        this.oriel.root.visible = true;
+        this.audio.reveal();
+        const obs = new THREE.Vector3(OBSERVATORY.x, groundHeight(OBSERVATORY.x, OBSERVATORY.z) + 6, OBSERVATORY.z);
+        const from = this.structures.lighthouseTop.clone().lerp(obs, 0.42).add(new THREE.Vector3(0, 10, 0));
+        const toObs = obs.clone().sub(from).setY(0).normalize();
+        this.rig.setShot(from.addScaledVector(new THREE.Vector3(-toObs.z, 0, toObs.x), 14), obs, 0.9);
+      }
+      if (t > 12.5) {
+        this.state = 'play';
+        this.chapter = 'oriel';
+        this.vehicle.enabled = true;
+        this.rig.endCinematic();
+        this.ui.banner('a light answered', 'Find Oriel', 3800);
+      }
+    } else if (this.finaleKind === 'meet') {
+      if (t > 1.5 && !this.dialogue.busy) {
+        this.finaleKind = 'rise';
+        this.finaleT = 0;
+        this.chapter = 'done';
+        this.finished = true;
+        this.audio.finale();
+        this.ui.banner('epilogue', 'The isle rises', 5000);
+        this.rig.startCinematic(new THREE.Vector3(0, -6, 0), 150, 48, 0.1);
+      }
+    } else {
+      this.atmo.rise = Math.min(1, t / 9);
+      this.fireworks(dt, new THREE.Vector3(0, 0, 0), 70);
+      if (t > 10.5 && this.state === 'finale') {
+        this.state = 'end';
+        this.ui.showEnd(this.playTime, `${this.glimmerCount}/${GLIMMERS.length}`, `${this.notesRead.filter(Boolean).length}/${NOTES.length}`);
+      }
     }
-    if (t > 8.5 && this.state === 'finale') {
-      this.state = 'end';
-      this.ui.showEnd(this.playTime, `${this.glimmerCount}/${GLIMMERS.length}`, `${this.notesRead.filter(Boolean).length}/${NOTES.length}`);
-    }
+  }
+
+  private fireworks(dt: number, center: THREE.Vector3, spread: number) {
+    if (Math.random() > dt * 3) return;
+    const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * spread;
+    const pos = new THREE.Vector3(center.x + Math.cos(a) * r, 26 + Math.random() * 16, center.z + Math.sin(a) * r);
+    const cols = [[0xffd27a, 0xff7a3a], [0xffc2d6, 0xff6a8a], [0xbfe8ff, 0x8fb0ff], [0xfff4c0, 0xffd27a]][Math.floor(Math.random() * 4)];
+    this.glow.emit({ pos, spread: 16, count: 90, life: 1.6, size: 0.35, sizeEnd: 0.05, color: cols[0], color2: cols[1], gravity: 4, drag: 1.4 });
+    this.audio.noise({ dur: 0.5, vol: 0.12, freq: 900, sweep: 200 });
   }
 
   private takeGlimmer(i: number) {
@@ -536,6 +781,7 @@ export class Game {
     this.audio.glimmer(this.combo);
     this.glow.emit({ pos: g.pos, spread: 7, count: 36, life: 0.9, size: 0.3, sizeEnd: 0.02, color: 0xffe9a0, color2: 0xffb347, gravity: 2, drag: 2, shape: 2 });
     this.ui.setGlimmers(this.glimmerCount, GLIMMERS.length, true);
+    this.dialogue.say(LINES.glimmerFirst, 'glimmer');
     if (this.glimmerCount === GLIMMERS.length) this.ui.toast('Every glimmer on the isle — you found them all ✦', 4000);
     else if (this.glimmerCount % 5 === 0) this.ui.toast(`${this.glimmerCount} glimmers found`);
   }
@@ -558,20 +804,23 @@ export class Game {
     this.vehicle.respawn(x, groundHeight(x, z) + 1.5, z, yaw);
   }
 
-  respawn(fell = false) {
+  /** Back to the last lit beacon (pause menu). */
+  respawn() {
     if (this.respawning) return;
     this.respawning = true;
-    if (fell) this.audio.fail();
     this.ui.fade(true);
     setTimeout(() => {
       const c = this.checkpoint;
+      this.falling = false;
+      this.vehicle.enabled = this.state === 'play';
       this.vehicle.respawn(c.x, groundHeight(c.x, c.z) + 1.4, c.z, c.yaw);
+      this.rig.mode = 'follow';
       this.rig.camera.position.set(c.x, groundHeight(c.x, c.z) + 14, c.z + 14);
       this.audio.respawn();
       this.ui.fade(false);
       this.soft.emit({ pos: new THREE.Vector3(c.x, groundHeight(c.x, c.z) + 0.5, c.z), spread: 6, count: 30, life: 1, size: 0.6, sizeEnd: 1.8, color: 0xfff1d8, alpha: 0.6, drag: 3 });
       this.respawning = false;
-    }, fell ? 650 : 350);
+    }, 350);
   }
 
   restart() {
@@ -587,10 +836,18 @@ export class Game {
     this.notesRead = NOTES.map(() => false);
     this.todTarget = 0;
     this.audio.intensity = 0;
+    this.chapter = 'beacons';
+    this.oriel.root.visible = false;
+    this.atmo.rise = 0;
+    (this.structures.observatoryLamp.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
+    this.dialogue.reset();
     this.checkpoint = { x: SPAWN.x, z: SPAWN.z, yaw: SPAWN.yaw };
+    this.safeSpot = { ...this.checkpoint };
+    this.lastProgressAt = this.time;
     this.respawn();
     this.ui.setGlimmers(0, GLIMMERS.length);
     this.ui.toast('A new evening begins');
+    setTimeout(() => this.dialogue.say(LINES.intro, 'intro'), 900);
   }
 
   private applyTimeOfDay() {
@@ -736,6 +993,20 @@ export class Game {
       }
     }
 
+    // geysers breathe; the observatory answers once Oriel is home
+    e.geyser -= dt;
+    if (e.geyser <= 0) {
+      e.geyser = 0.09;
+      for (const g of GEYSERS) {
+        this.soft.emit({ pos: new THREE.Vector3(g.x, groundHeight(g.x, g.z) + 0.3, g.z), posSpread: 2.2, vel: new THREE.Vector3(0, 7, 0), spread: 1.2, life: 1.0, size: 0.5, sizeEnd: 1.6, color: 0xffffff, color2: 0xd8ecff, alpha: 0.32, drag: 1.2 });
+      }
+    }
+    if (this.oriel.root.visible) {
+      const blink = this.chapter === 'oriel' ? (Math.sin(t * 5) > 0.2 ? 6 : 0.6) : 4;
+      (this.structures.observatoryLamp.material as THREE.MeshStandardMaterial).emissiveIntensity = blink;
+      for (const w of this.structures.observatoryWindows) (w.material as THREE.MeshStandardMaterial).emissiveIntensity = 3;
+    }
+
     // ---- vehicle-driven effects
     if (this.state === 'play' || this.state === 'intro') {
       const speed = Math.abs(v.speed);
@@ -796,15 +1067,25 @@ export class Game {
   private updateHud() {
     const lit = this.obj.beacons.map((b) => b.lit);
     const n = this.obj.litCount;
-    const target = this.obj.nearestUnlit(this.vehicle.position);
-    let title = `Relight the beacons · ${n}/5`;
-    let hint = '';
-    if (n === 5 && !this.obj.finale.lit) title = 'Light the lighthouse';
-    if (this.obj.finale.lit) title = 'The isle is safe · explore freely';
-    if (target) {
-      const d = Math.round(target.pos.distanceTo(this.vehicle.position));
-      hint = target === this.obj.finale ? `drive into the ring at its door — ${d} m` : `${target.def.name} — ${d} m · ${target.def.hint}`;
-    } else hint = `${this.glimmerCount}/${GLIMMERS.length} glimmers · ${this.notesRead.filter(Boolean).length}/${NOTES.length} notes`;
+    const p = this.vehicle.position;
+    let title = '', hint = '';
+    let target: THREE.Vector3 | null = null;
+    if (this.chapter === 'beacons') {
+      const b = this.obj.nearestUnlit(p);
+      title = `Relight the beacons · ${n}/${NB}`;
+      if (b) { target = b.pos; hint = `${b.def.name} — ${Math.round(b.pos.distanceTo(p))} m · ${b.def.hint}`; }
+    } else if (this.chapter === 'lighthouse') {
+      target = this.obj.finale.pos;
+      title = 'Light the lighthouse';
+      hint = `drive into the ring at its door — ${Math.round(target.distanceTo(p))} m`;
+    } else if (this.chapter === 'oriel') {
+      target = new THREE.Vector3(ORIEL.x, groundHeight(ORIEL.x, ORIEL.z), ORIEL.z);
+      title = 'Find Oriel on the Observatory isle';
+      hint = `${Math.round(target.distanceTo(p))} m · across the bridge past the stone circle`;
+    } else {
+      title = 'The isle is safe · explore freely';
+      hint = `${this.glimmerCount}/${GLIMMERS.length} glimmers · ${this.notesRead.filter(Boolean).length}/${NOTES.length} notes`;
+    }
     this.ui.setBeacons(lit, this.obj.finale.lit, title, hint);
     this.ui.setGlimmers(this.glimmerCount, GLIMMERS.length);
     this.ui.setTimer(this.playTime);
@@ -814,24 +1095,22 @@ export class Game {
     }
 
     // off-screen pointer to the current target
-    if (target && this.state === 'play') {
+    if (target && this.state === 'play' && !this.falling) {
       const cam = this.rig.camera;
-      const p = target.pos.clone().add(new THREE.Vector3(0, 2, 0)).project(cam);
-      const behind = p.z > 1;
+      const pr = target.clone().add(new THREE.Vector3(0, 2, 0)).project(cam);
+      const behind = pr.z > 1;
       const w = window.innerWidth, h = window.innerHeight;
-      const onScreen = !behind && Math.abs(p.x) < 0.92 && Math.abs(p.y) < 0.88;
-      const dist = target.pos.distanceTo(this.vehicle.position);
+      const onScreen = !behind && Math.abs(pr.x) < 0.92 && Math.abs(pr.y) < 0.88;
+      const dist = target.distanceTo(p);
       if (onScreen || dist < 12) this.ui.pointer(null);
       else {
-        let x = p.x, y = p.y;
+        let x = pr.x, y = pr.y;
         if (behind) { x = -x; y = -y; }
         const ang = Math.atan2(y, x);
         const ex = Math.cos(ang), ey = Math.sin(ang);
-        const s = Math.min(0.86 / Math.abs(ex || 1e-6), 0.8 / Math.abs(ey || 1e-6));
-        const sx = (ex * s * 0.5 + 0.5) * w, sy = (-ey * s * 0.5 + 0.5) * h;
-        this.ui.pointer({ x: sx, y: sy, angle: -ang + Math.PI / 2 }, dist);
+        const k = Math.min(0.86 / Math.abs(ex || 1e-6), 0.8 / Math.abs(ey || 1e-6));
+        this.ui.pointer({ x: (ex * k * 0.5 + 0.5) * w, y: (-ey * k * 0.5 + 0.5) * h, angle: -ang + Math.PI / 2 }, dist);
       }
     } else this.ui.pointer(null);
-    void PLAZA; void BEACONS; void RUINS;
   }
 }

@@ -5,7 +5,7 @@ import {
   Builder, M, MAT, addFoliageSway, blob, cone, cyl, ico, instanced, uniforms,
 } from './assets';
 import {
-  BRIDGE_ANGLE, CAMP, FALLS, ISLET, LIGHTHOUSE, ORCHARD, PLAZA, RUINS, WINDMILL, islandRadius, isletRadius,
+  BRIDGES, CAMP, FALLS, GEYSERS, ISLET, ISLETS, LIGHTHOUSE, ORCHARD, PLAZA, RUINS, WINDMILL, islandRadius, isletRadiusOf,
 } from './layout';
 import {
   PAL, groundHeight, groundNormal, inClearing, isInsideIsland, pondFactor, roadDist, streamDist,
@@ -157,6 +157,8 @@ export class Foliage {
       { x: -18, z: 42, r: 9, n: 5, kinds: ['puff', 'birch'] },
       { x: 18, z: 18, r: 10, n: 6, kinds: ['puff', 'birch'] },
       { x: ISLET.x, z: ISLET.z, r: 7, n: 5, kinds: ['pine', 'puff', 'birch'] },
+      { x: ISLETS[1].x, z: ISLETS[1].z, r: 10, n: 7, kinds: ['pine', 'pine', 'birch'] },
+      { x: ISLETS[2].x, z: ISLETS[2].z, r: 9, n: 5, kinds: ['puff', 'birch', 'puff'] },
     ];
     for (const g of regions) {
       let placed = 0;
@@ -266,8 +268,9 @@ export class Foliage {
       for (let th = 0; th < Math.PI * 2; th += step / RR) {
         const r = radiusFn(th) - inset - rnd() * 1.4;
         const x = cx + Math.cos(th) * r, z = cz + Math.sin(th) * r;
-        if (Math.abs(th - BRIDGE_ANGLE) < 0.06 && cx === 0) continue; // bridge head
-        if (cx !== 0 && Math.abs(wrapAngle(BRIDGE_ANGLE + Math.PI - th)) < 0.35) continue;
+        if (cx === 0 && BRIDGES.some((b) => Math.abs(wrapAngle(th - b.angle)) < 0.07)) continue; // bridge heads
+        if (cx !== 0 && BRIDGES.some((b) => Math.hypot(x - b.b.x, z - b.b.z) < 5)) continue;
+        if (GEYSERS.some((g) => Math.hypot(x - g.x, z - g.z) < 6 || Math.hypot(x - g.tx, z - g.tz) < 7)) continue;
         if (Math.hypot(x - FALLS.x, z - FALLS.z) < 7) continue;
         if (roadDist(x, z) < 1) continue;
         const n = noise2(th * 3, cx * 0.1);
@@ -277,7 +280,7 @@ export class Foliage {
       }
     };
     rimRing(islandRadius, 0, 0, 3.2, 2.6);
-    rimRing(isletRadius, ISLET.x, ISLET.z, 2.6, 2.2);
+    for (const isl of ISLETS) rimRing((th) => isletRadiusOf(isl, th), isl.x, isl.z, 2.6, 2.2);
 
     // Rock clusters at chosen spots
     const clusters = [
@@ -339,7 +342,7 @@ export class Foliage {
     const items: { m: THREE.Matrix4; c?: THREE.Color }[] = [];
     const patches = [
       [PLAZA.x - 12, PLAZA.z + 4, 7], [PLAZA.x + 14, PLAZA.z - 8, 6], [-30, 24, 6], [-44, -30, 7], [RUINS.x, RUINS.z + 14, 6],
-      [ISLET.x, ISLET.z, 7], [30, 40, 7], [-10, 20, 6], [56, 2, 6], [10, -60, 7], [-60, 30, 7], [44, 30, 5],
+      [ISLET.x, ISLET.z, 7], [ISLETS[1].x + 4, ISLETS[1].z + 5, 6], [ISLETS[2].x, ISLETS[2].z, 8], [ISLETS[2].x + 4, ISLETS[2].z - 4, 5], [30, 40, 7], [-10, 20, 6], [56, 2, 6], [10, -60, 7], [-60, 30, 7], [44, 30, 5],
       [-14, -40, 6], [70, 30, 5], [-4, 64, 6],
     ];
     for (const [px, pz, pr] of patches) {
@@ -407,14 +410,14 @@ export class Foliage {
     for (let i = 0; i < nrm.length; i += 3) nrm[i + 1] = 1;
 
     // Scatter clumps, bucketed into spatial chunks for frustum culling.
-    const CH = 8; // chunks per side
-    const span = 200 / CH;
+    const CH = 12; // chunks per side
+    const span = 300 / CH;
     const buckets: number[][] = Array.from({ length: CH * CH }, () => []);
     const total = Math.floor(95000 * this.quality.grass);
     const c = new THREE.Color();
     let placed = 0;
-    for (let tries = 0; tries < total * 4 && placed < total; tries++) {
-      const x = R(-96, 96), z = R(-96, 96);
+    for (let tries = 0; tries < total * 9 && placed < total; tries++) {
+      const x = R(-145, 145), z = R(-145, 145);
       if (!isInsideIsland(x, z, 2.2)) continue;
       // meadows: denser in noisy patches, sparse elsewhere
       const meadow = smoothstep(-0.35, 0.35, fbm(x * 0.04 + 7, z * 0.04 - 3, 2));
@@ -431,7 +434,7 @@ export class Foliage {
       if (nrmY < 0.8) continue;
       const y = groundHeight(x, z);
       grassTint(x, z, c);
-      const gi = Math.min(CH - 1, Math.floor((x + 100) / span)) + Math.min(CH - 1, Math.floor((z + 100) / span)) * CH;
+      const gi = Math.min(CH - 1, Math.floor((x + 150) / span)) + Math.min(CH - 1, Math.floor((z + 150) / span)) * CH;
       const sc = (0.7 + rnd() * 0.6) * (0.75 + meadow * 0.45) * (rd < 2 ? 0.7 : 1);
       buckets[gi].push(x, y - 0.03, z, sc, rnd() * Math.PI * 2, c.r, c.g, c.b);
       placed++;
@@ -491,7 +494,7 @@ varying float vTip;`)
       geo.setAttribute('aYaw', new THREE.InstancedBufferAttribute(yaw, 1));
       geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tint, 3));
       geo.instanceCount = n;
-      const cx = -100 + ((i % CH) + 0.5) * span, cz = -100 + (Math.floor(i / CH) + 0.5) * span;
+      const cx = -150 + ((i % CH) + 0.5) * span, cz = -150 + (Math.floor(i / CH) + 0.5) * span;
       geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, (minY + maxY) / 2, cz), span * 0.75 + (maxY - minY));
       const mesh = new THREE.Mesh(geo, mat);
       mesh.receiveShadow = true;

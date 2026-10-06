@@ -28,7 +28,7 @@
     <div class="title-block">
       <p class="eyebrow">a tiny isle at the edge of dusk</p>
       <h1 class="brand big">Last Light</h1>
-      <p class="tagline">The sun is going down over the floating isle.<br/>Drive Wick, the lantern buggy, and relight the five beacons before night falls.</p>
+      <p class="tagline">Every dusk the isle sinks a little lower into the clouds, and every dusk Keeper Oriel lights its six beacons.<br/>Tonight, Oriel didn't come home. Take Wick, the lantern buggy, and light them yourself.</p>
       <p class="press">Press any key to explore</p>
     </div>
     <div class="title-foot"><span>Sound on · headphones recommended</span><span id="title-quality"></span></div>
@@ -58,11 +58,14 @@
       <div><kbd>⇧</kbd><span>boost</span></div>
       <div><kbd class="wide">Space</kbd><span>hop</span></div>
       <div><kbd>E</kbd><span>interact</span></div>
-      <div><kbd>R</kbd><span>respawn</span></div>
+      <div><kbd>R</kbd><span>reset / unstick</span></div>
+      <div><kbd>T</kbd><span>time of day</span></div>
       <div><kbd>M</kbd><span>map</span></div>
       <div class="muted"><span>drag to look · scroll to zoom · H hides this</span></div>
     </div>
     <div id="toast" class="toast"></div>
+    <div id="dialogue" class="dialogue"><div class="dlg-avatar" id="dlg-avatar"></div><div class="dlg-body"><div class="dlg-name" id="dlg-name"></div><div class="dlg-text" id="dlg-text"></div></div></div>
+    <div id="speedlines" class="speedlines"></div>
     <div id="banner" class="banner"><small id="banner-small"></small><h2 id="banner-big"></h2></div>
   </div>
 
@@ -95,6 +98,9 @@
       <div class="menu-row"><span>Quality</span>
         <div class="seg" id="seg-quality"><button data-q="low">Low</button><button data-q="medium">Medium</button><button data-q="high">High</button></div>
       </div>
+      <div class="menu-row"><span>Sky</span>
+        <div class="seg" id="seg-sky"><button data-sky="story">Story</button><button data-sky="golden">Golden</button><button data-sky="dusk">Dusk</button><button data-sky="night">Night</button></div>
+      </div>
       <div class="menu-row"><span>Sound</span><div class="seg" id="seg-sound"><button data-s="on">On</button><button data-s="off">Off</button></div></div>
       <div class="menu-row"><span>Music</span><div class="seg" id="seg-music"><button data-m="on">On</button><button data-m="off">Off</button></div></div>
       <button class="menu-btn" data-act="respawn">Respawn at last beacon</button>
@@ -106,9 +112,9 @@
   <!-- End card -->
   <div id="end" class="modal hidden">
     <div class="end-card">
-      <p class="eyebrow">the lighthouse answers</p>
+      <p class="eyebrow">epilogue</p>
       <h2 class="brand big">The isle remembers.</h2>
-      <p class="end-sub">Every beacon is burning. The island floats up, and the night is kind.</p>
+      <p class="end-sub">Six beacons, one lighthouse, and Oriel safe beneath her stars.<br/>The isle rises above the clouds again — until tomorrow's dusk.</p>
       <div class="stats">
         <div><b id="end-time">0:00</b><span>time</span></div>
         <div><b id="end-glimmers">0/0</b><span>glimmers</span></div>

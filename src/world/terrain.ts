@@ -2,13 +2,13 @@
 // heightmap texture (for water foam, grass, map) and vertex-painted ground.
 import * as THREE from 'three';
 import {
-  BRIDGE, CLEARINGS, HILL, ISLET, PADS, POND, ROADS, RUINS, STREAM, WATER_LEVEL, WINDHILL,
-  islandRadius, isletRadius, PLAZA,
+  BRIDGES, CLEARINGS, HILL, ISLETS, PADS, POND, ROADS, RUINS, STREAM, WATER_LEVEL, WINDHILL,
+  islandRadius, isletRadiusOf, PLAZA, type BridgeDef,
 } from './layout';
 import { clamp, fbm, lerp, noise2, noise2b, polylineDist, smoothstep } from '../utils/math';
 
-export const HALF = 100;
-export const GRID = 250; // cells per side
+export const HALF = 150;
+export const GRID = 340; // cells per side
 const STEP = (HALF * 2) / GRID;
 
 // ---------- Road distance field (stamped once) ----------
@@ -58,8 +58,11 @@ const MOUNDS = [
 export function isInsideIsland(x: number, z: number, margin = 0) {
   const r = Math.hypot(x, z);
   if (r < islandRadius(Math.atan2(z, x)) - margin) return true;
-  const ix = x - ISLET.x, iz = z - ISLET.z;
-  return Math.hypot(ix, iz) < isletRadius(Math.atan2(iz, ix)) - margin;
+  for (const isl of ISLETS) {
+    const ix = x - isl.x, iz = z - isl.z;
+    if (Math.hypot(ix, iz) < isletRadiusOf(isl, Math.atan2(iz, ix)) - margin) return true;
+  }
+  return false;
 }
 
 export function pondFactor(x: number, z: number) {
@@ -112,13 +115,19 @@ function rawHeight(x: number, z: number): number {
   // Falloff into the void
   const hMain = lerp(h, -7, smoothstep(R - 2.4, R + 1.2, r));
 
-  // Far islet
-  const ix = x - ISLET.x, iz = z - ISLET.z;
-  const dI = Math.hypot(ix, iz);
-  const RI = isletRadius(Math.atan2(iz, ix));
-  let hi = 1.2 + bump(dI / (RI * 0.9)) * 1.4 + noise2b(x * 0.12, z * 0.12) * 0.15;
-  hi = lerp(hi, -7, smoothstep(RI - 2.2, RI + 1.2, dI));
-  return Math.max(hMain, hi);
+  // Islets
+  let best = hMain;
+  for (const isl of ISLETS) {
+    const ix = x - isl.x, iz = z - isl.z;
+    const dI = Math.hypot(ix, iz);
+    if (dI > isl.r + 4) continue;
+    const RI = isletRadiusOf(isl, Math.atan2(iz, ix));
+    const lump = isl.id === 'windward' ? 2.2 : isl.id === 'observatory' ? 1.8 : 1.4;
+    let hi = 1.2 + bump(dI / (RI * 0.9)) * lump + noise2b(x * 0.12, z * 0.12) * 0.15;
+    hi = lerp(hi, -7, smoothstep(RI - 2.2, RI + 1.2, dI));
+    if (hi > best) best = hi;
+  }
+  return best;
 }
 
 const padTargets = PADS.map((p) => rawHeight(p.x, p.z));
@@ -292,7 +301,7 @@ float vnoise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); f=f*f*(3.-2.*f);
   mesh.name = 'terrain';
 
   // Heightmap texture: R = height, G = water mask
-  const TN = 256;
+  const TN = 320;
   const data = new Float32Array(TN * TN * 4);
   for (let j = 0; j < TN; j++) {
     for (let i = 0; i < TN; i++) {
@@ -314,7 +323,7 @@ float vnoise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); f=f*f*(3.-2.*f);
 }
 
 /** Bridge deck heights at both heads (terrain is flattened there by PADS). */
-export const BRIDGE_Y = {
-  a: heightAt(BRIDGE.a.x, BRIDGE.a.z) + 0.3,
-  b: heightAt(BRIDGE.b.x, BRIDGE.b.z) + 0.3,
-};
+export function bridgeY(b: BridgeDef) {
+  return { a: heightAt(b.a.x, b.a.z) + 0.12, b: heightAt(b.b.x, b.b.z) + 0.12 };
+}
+export const BRIDGE_Y = bridgeY(BRIDGES[0]);

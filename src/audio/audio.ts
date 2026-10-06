@@ -165,6 +165,21 @@ export class AudioEngine {
     this.noise({ dur: 2.5, vol: 0.3, freq: 200, sweep: 5000, type: 'bandpass', q: 0.5 });
     this.bell(0.7);
   }
+  boost() { this.noise({ dur: 0.7, vol: 0.28, freq: 400, sweep: 2600, type: 'bandpass', q: 0.8 }); this.tone(90, { dur: 0.5, vol: 0.18, type: 'sawtooth', glide: 2.2 }); }
+  geyser() {
+    this.noise({ dur: 1.8, vol: 0.45, freq: 200, sweep: 3200, type: 'bandpass', q: 0.5 });
+    this.tone(120, { dur: 1.2, vol: 0.15, type: 'sine', glide: 3 });
+  }
+  fallWind() { this.noise({ dur: 2.2, vol: 0.35, freq: 1800, sweep: 300, type: 'bandpass', q: 0.4 }); }
+  inflate() { this.tone(160, { dur: 0.9, vol: 0.14, type: 'triangle', glide: 2.4 }); this.noise({ dur: 0.8, vol: 0.12, freq: 600, sweep: 1600 }); }
+  pop() { this.noise({ dur: 0.12, vol: 0.4, freq: 2400, q: 1.5 }); this.tone(520, { dur: 0.25, vol: 0.12, type: 'sine', glide: 0.5 }); }
+  blip(who: 'ember' | 'oriel') {
+    const f = who === 'ember' ? 700 + Math.random() * 260 : 330 + Math.random() * 120;
+    this.tone(f, { dur: 0.05, vol: 0.022, type: who === 'ember' ? 'triangle' : 'sine' });
+  }
+  reveal() {
+    [0, 4, 7, 11, 14].forEach((n, i) => this.tone(392 * Math.pow(2, n / 12), { dur: 2.4, vol: 0.07, type: 'sine', when: i * 0.12, attack: 0.03 }));
+  }
   respawn() { this.tone(400, { dur: 0.4, vol: 0.1, glide: 2 }); this.noise({ dur: 0.4, vol: 0.1, freq: 3000, sweep: 600, type: 'bandpass' }); }
   fail() { this.tone(300, { dur: 0.8, vol: 0.12, type: 'triangle', glide: 0.4 }); }
 

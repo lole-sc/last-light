@@ -2,7 +2,7 @@
 // time-of-day palette that the game advances each time a beacon is lit.
 import * as THREE from 'three';
 import { Builder, M, MAT, blob, uniforms } from './assets';
-import { ISLET, islandRadius, isletRadius } from './layout';
+import { ISLETS, islandRadius, isletRadiusOf } from './layout';
 import { mulberry32, smoothstep } from '../utils/math';
 
 interface Key {
@@ -37,6 +37,11 @@ export class Atmosphere {
   floaters: { o: THREE.Object3D; base: THREE.Vector3; ph: number }[] = [];
   birds: { o: THREE.Group; wl: THREE.Mesh; wr: THREE.Mesh; r: number; h: number; ph: number; sp: number }[] = [];
   sunDir = new THREE.Vector3();
+  sea!: THREE.Mesh;
+  /** 0..1: the cloud sea sinks away (the isle 'rises') in the epilogue */
+  rise = 0;
+  private shooting: { line: THREE.Line; t: number; dur: number; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
+  private nextShoot = 4;
   time = 0; // 0 = golden hour, 1 = night
   exposure = 1;
   current = {
@@ -59,6 +64,7 @@ export class Atmosphere {
     this.buildPuffs();
     this.buildUnderside();
     this.buildBirds();
+    this.buildShootingStars();
     this.setTime(0);
     return this.group;
   }
@@ -169,6 +175,7 @@ export class Atmosphere {
     sea.rotation.x = -Math.PI / 2;
     sea.position.y = -36;
     sea.renderOrder = -5;
+    this.sea = sea;
     this.group.add(sea);
   }
 
@@ -265,9 +272,12 @@ export class Atmosphere {
     mat.side = THREE.DoubleSide;
     const main = mk(0, 0, islandRadius, 120, 1, 9);
     main.material = mat;
-    const islet = mk(ISLET.x, ISLET.z, isletRadius, 28, 0.45, 10);
-    islet.material = mat;
-    this.group.add(main, islet);
+    this.group.add(main);
+    ISLETS.forEach((isl, i) => {
+      const m = mk(isl.x, isl.z, (th) => isletRadiusOf(isl, th), 30, 0.42 + i * 0.04, 10 + i);
+      m.material = mat;
+      this.group.add(m);
+    });
 
     // floating rock shards around the isle
     const r = mulberry32(12);
@@ -303,6 +313,20 @@ export class Atmosphere {
       g.scale.setScalar(1.6);
       this.birds.push({ o: g, wl, wr, r: 40 + r() * 50, h: 22 + r() * 16, ph: r() * Math.PI * 2, sp: 0.07 + r() * 0.05 });
       this.group.add(g);
+    }
+  }
+
+  private buildShootingStars() {
+    for (let i = 0; i < 3; i++) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute([1, 0.95, 0.85, 0, 0, 0], 3));
+      const line = new THREE.Line(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      line.frustumCulled = false;
+      line.visible = false;
+      line.renderOrder = -8;
+      this.group.add(line);
+      this.shooting.push({ line, t: 0, dur: 1, from: new THREE.Vector3(), to: new THREE.Vector3() });
     }
   }
 
@@ -343,8 +367,9 @@ export class Atmosphere {
     const c = this.cloudSeaMat.uniforms;
     c.uLit.value.copy(cur.cloudLit); c.uShadow.value.copy(cur.cloudShadow); c.uFog.value.copy(cur.fog).lerp(cur.horizon, 0.4);
     c.uSunDir.value.copy(this.sunDir);
-    this.puffMat.color.copy(cur.cloudLit);
-    this.puffMat.emissive.copy(cur.cloudShadow).multiplyScalar(0.55);
+    const night = smoothstep(0.55, 1.0, t);
+    this.puffMat.color.copy(cur.cloudLit).lerp(cur.fog, 0.15 + night * 0.35);
+    this.puffMat.emissive.copy(cur.cloudShadow).multiplyScalar(0.55 - night * 0.35);
     uniforms.uNight.value = smoothstep(0.55, 1.0, t);
   }
 
@@ -361,13 +386,44 @@ export class Atmosphere {
     this.sun.target.position.set(fx, focus.y, fz);
     this.sun.position.set(fx + this.sunDir.x * 150, focus.y + this.sunDir.y * 150, fz + this.sunDir.z * 150);
 
+    const sink = this.rise * this.rise * (3 - 2 * this.rise);
+    this.sea.position.y = -36 - sink * 50;
     for (const p of this.puffs) {
       p.userData.a += p.userData.sp * dt;
+      if (p.userData.y0 === undefined) p.userData.y0 = p.position.y;
       p.position.x = Math.cos(p.userData.a) * p.userData.r;
       p.position.z = Math.sin(p.userData.a) * p.userData.r;
+      p.position.y = p.userData.y0 - sink * 46;
+    }
+    // shooting stars once the sky darkens (Oriel went chasing one…)
+    const night = uniforms.uNight.value;
+    this.nextShoot -= dt;
+    if (this.nextShoot <= 0 && this.time > 0.35) {
+      this.nextShoot = 3 + Math.random() * 7 * (1.4 - night);
+      const s = this.shooting.find((x) => !x.line.visible);
+      if (s) {
+        const a = Math.random() * Math.PI * 2, el = 0.35 + Math.random() * 0.4;
+        s.from.set(Math.cos(a) * Math.cos(el), Math.sin(el), Math.sin(a) * Math.cos(el)).multiplyScalar(1100);
+        const a2 = a + (Math.random() < 0.5 ? 1 : -1) * (0.25 + Math.random() * 0.25);
+        const el2 = el - 0.12 - Math.random() * 0.1;
+        s.to.set(Math.cos(a2) * Math.cos(el2), Math.sin(el2), Math.sin(a2) * Math.cos(el2)).multiplyScalar(1100);
+        s.t = 0; s.dur = 0.7 + Math.random() * 0.6;
+        s.line.visible = true;
+      }
+    }
+    for (const s of this.shooting) {
+      if (!s.line.visible) continue;
+      s.t += dt / s.dur;
+      if (s.t >= 1) { s.line.visible = false; continue; }
+      const pos = s.line.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const head = s.from.clone().lerp(s.to, s.t);
+      const tail = s.from.clone().lerp(s.to, Math.max(0, s.t - 0.25));
+      pos.setXYZ(0, head.x, head.y, head.z); pos.setXYZ(1, tail.x, tail.y, tail.z);
+      pos.needsUpdate = true;
+      (s.line.material as THREE.LineBasicMaterial).opacity = Math.sin(s.t * Math.PI) * (0.4 + night * 0.6);
     }
     for (const f of this.floaters) {
-      f.o.position.y = f.base.y + Math.sin(time * 0.6 + f.ph) * 0.8;
+      f.o.position.y = f.base.y + Math.sin(time * 0.6 + f.ph) * 0.8 - sink * 30;
       f.o.rotation.y += dt * 0.05;
     }
     const birdVis = 1 - smoothstep(0.6, 0.9, this.time);

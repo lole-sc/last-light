@@ -1,6 +1,10 @@
 # Last Light
 
-A small browser game about a floating island at dusk. You drive **Wick**, a lantern buggy, and relight five beacons before night falls. Each beacon you light pushes the sky further from golden hour toward night. Once all five are burning, you light the lighthouse.
+A small browser game about a floating archipelago at dusk.
+
+Every evening the isle sinks a little lower into the clouds, and every evening Keeper Oriel lights its six beacons to lift it back up. Tonight, Oriel didn't come home. You drive **Wick**, a lantern buggy, guided by **Ember**, the little flame living in its lantern. Together you relight the beacons across three islands, fire up the lighthouse, and follow the light that answers to find Oriel.
+
+Each beacon you light pushes the sky further from golden hour toward night.
 
 Built with **Three.js + Rapier + TypeScript + Vite**. Every mesh, texture, shader and sound is generated in code. There are no model files, no image textures and no audio files.
 
@@ -9,7 +13,13 @@ Built with **Three.js + Rapier + TypeScript + Vite**. Every mesh, texture, shade
 | | |
 |---|---|
 | ![Establishing shot](docs/intro.jpg) | ![The plaza at golden hour](docs/plaza.jpg) |
-| ![Night falls, the lamps come on](docs/night.jpg) | |
+| ![Night falls, the lamps come on](docs/night.jpg) | ![Riding the wind geyser to Windward isle](docs/flight.jpg) |
+| ![The Observatory isle answers](docs/observatory.jpg) | ![Epilogue: the isle rises](docs/epilogue.jpg) |
+| ![Wick, the lantern buggy](docs/wick.jpg) | ![The lantern-balloon rescue](docs/balloon.jpg) |
+
+## Deploy
+
+The repo is ready for Vercel: import it and the framework is detected as Vite (see `vercel.json`). Build command `npm run build`, output `dist/`.
 
 ## Run it
 
@@ -30,27 +40,35 @@ Add `?play` to the URL to skip the title screen.
 | Shift | boost |
 | Space | hop |
 | E / Enter | read a keeper's note |
-| R | respawn at last beacon |
+| R | reset / unstick (or rescue if you're off the map) |
+| T | cycle time of day: story / golden / dusk / night |
+| Enter | skip dialogue |
 | M | map |
 | N | mute |
 | H | hide the controls card |
-| Esc | pause (quality, sound, music, restart) |
+| Esc | pause (quality, sky, sound, music, respawn at last beacon, restart) |
 | Mouse drag / wheel | orbit / zoom the camera |
 
-## What's on the island
+## What's in the game
 
-- **5 beacons + the lighthouse finale.** Drive into a ring to kindle it. Each beacon moves the time of day along, switches on nearby street lamps, and adds a layer to the music.
-- **26 glimmers** to collect. Some sit on top of jump arcs, on a mushroom cap, under a bridge, or on the waterfall lip, and one only appears if you ring the bell in the stone circle twice.
-- **6 keeper's notes.** One of them is at a hidden camp on the north rim.
-- **Physical toys:** crate pyramids, barrels, hay bales, pumpkins, stone cairns, a giant beach ball, a bell on a real pendulum joint, bouncy mushrooms, two jump ramps, and a rope bridge that sags and sways under the car.
-- **The waterfall:** the river runs off the island's edge into the cloud sea. Near it, the camera swings out over the void to frame the shot.
+- **Story in four chapters.** Light the six beacons, then the lighthouse, then follow the light that blinks back to find Oriel on the Observatory isle. The epilogue cinematic lifts the isle out of the clouds. Ember (and later Oriel) speak in typed-out dialogue lines that react to what you do: your first fall, your first geyser ride, your first glimmer, getting stuck.
+- **An archipelago:** the main isle plus three islets. **Far islet** and the **Observatory isle** hang off rope bridges. **Windward isle** is reached by riding a wind geyser that throws Wick on a ballistic arc across the void, and a second geyser throws you back.
+- **Falling off the world is a feature.** The camera holds and watches Wick drop through the cloud sea. Then the lantern inflates into a little hot-air balloon and floats you back down onto the last safe spot.
+- **Wick v2:** clear-coated paint, bug-eye headlights with a real night beam, chrome grille, glass cabin, roof rack with luggage, spare tyre and door roundels. The springy lantern antenna is still there.
+- **Feel:** a boost with a kick, speed lines and FOV punch. Rope bridges have a frictionless deck that only moves vertically, so wheels never snag on them. An escalating anti-stuck routine frees the car from crate piles and corners on its own.
+- **Sky control:** play the time of day as the story dictates, or force golden hour, dusk or night from the pause menu or the T key.
+- **32 glimmers**, including two that hang in the geyser's flight path and one that only appears if you ring the stone-circle bell twice, plus **8 keeper's notes**.
+- **Physical toys:** crate pyramids, barrels, hay bales, pumpkins, cairns, a giant beach ball, a pendulum bell, bouncy mushrooms and jump ramps.
+- **The waterfall:** the river spills off the edge in a ballistic arc, and a camera hint swings out over the void to frame it.
 
 ## Architecture
 
 ```
 src/
   main.ts                 entry; applies global shader patches
-  game/game.ts            boot, main loop, state machine, objectives, FX/audio wiring
+  game/game.ts            boot, main loop, story chapters, geysers, falls/rescue, FX/audio wiring
+  game/story.ts           dialogue lines + typewriter dialogue player
+  game/oriel.ts           Keeper Oriel (procedural character, waves at you)
   game/vehicle.ts         Rapier ray-cast vehicle + visual springs (roll, pitch, squash, antenna)
   game/props.ts           dynamic props
   game/objectives.ts      beacons, finale ring, glimmers
@@ -63,7 +81,8 @@ src/
   world/terrain.ts        analytic height field → mesh, trimesh collider, heightmap texture
   world/assets.ts         geometry Builder (baked vertex colour, AO, wobble) + foliage wind shader
   world/foliage.ts        trees, rocks, bushes, flowers, ~95k instanced grass clumps
-  world/structures.ts     lighthouse, windmill, hut, ruins, bridges, lamps, ramps, mushrooms…
+  world/structures.ts     lighthouse, windmill, hut, ruins, observatory, geysers, lamps, ramps…
+  world/ropebridge.ts     kinematic rope bridges (vertical-only physics deck, swaying visuals)
   world/water.ts          depth-aware pond/river shader, waterfall sheet, lily pads, ripples
   world/atmosphere.ts     sky, sun/moon, time-of-day palette, cloud sea, island underside, birds
   fx/particles.ts         pooled point-sprite particles + ambient motes and fireflies

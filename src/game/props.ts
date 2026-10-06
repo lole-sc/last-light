@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Builder, M, MAT, blob, box, cyl, lathe } from '../world/assets';
-import { HUT, ISLET, ORCHARD, PLAZA, POND, RUINS, WINDMILL } from '../world/layout';
+import { HUT, ISLET, ORCHARD, PLAZA, POND, RUINS, WINDMILL, WINDWARD } from '../world/layout';
 import { groundHeight, roadDist } from '../world/terrain';
 import { mulberry32 } from '../utils/math';
 import type { DynamicLink, Physics } from '../core/physics';
@@ -78,7 +78,7 @@ export class Props {
     };
     const addCrate = (x: number, y: number, z: number, yaw: number) => {
       const m = mk(crate, MAT.std, x, y, z, yaw);
-      this.links.push(this.physics.addDynamic(m, [RAPIER.ColliderDesc.cuboid(0.45, 0.45, 0.45).setFriction(0.7).setRestitution(0.15)], { mass: 1.6, kind: 'crate', sleep: true }));
+      this.links.push(this.physics.addDynamic(m, [RAPIER.ColliderDesc.cuboid(0.45, 0.45, 0.45).setFriction(0.7).setRestitution(0.15)], { mass: 0.9, kind: 'crate', sleep: true }));
     };
     const pyramid = (cx: number, cz: number, yaw: number, rows = 3) => {
       const gy = groundHeight(cx, cz);
@@ -92,7 +92,6 @@ export class Props {
     pyramid(-1.5, 35.5, 0.2, 3);
     pyramid(PLAZA.x + 7, PLAZA.z + 4.5, -0.6, 2);
     pyramid(WINDMILL.x - 5, WINDMILL.z + 5, 0.8, 2);
-    pyramid(ISLET.x - 3, ISLET.z - 4, 0.4, 2);
     pyramid(RUINS.x + 14, RUINS.z + 10, 0, 3);
 
     const addBarrel = (x: number, z: number, upright = true) => {
@@ -103,7 +102,8 @@ export class Props {
     const hx = HUT.x, hz = HUT.z;
     addBarrel(hx + 3.6, hz - 1.5); addBarrel(hx + 4.4, hz - 0.6); addBarrel(hx + 3.8, hz + 0.4);
     addBarrel(WINDMILL.x + 4, WINDMILL.z + 1); addBarrel(WINDMILL.x + 4.8, WINDMILL.z + 2); addBarrel(WINDMILL.x + 3.6, WINDMILL.z + 2.6, false);
-    addBarrel(POND.x + 12, POND.z + 12); addBarrel(ISLET.x + 3, ISLET.z - 4.5);
+    addBarrel(POND.x + 12, POND.z + 12); addBarrel(ISLET.x + 4.5, ISLET.z + 2.5); addBarrel(WINDWARD.x + 6, WINDWARD.z - 3);
+    pyramid(WINDWARD.x + 2, WINDWARD.z + 8, 1.2, 2);
 
     // orchard: hay bales and a pumpkin patch
     for (let i = 0; i < 6; i++) {

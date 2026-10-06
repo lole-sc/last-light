@@ -2,14 +2,15 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
-  Builder, M, MAT, blob, box, cone, cyl, ico, lathe, prism, torus,
+  Builder, M, MAT, blob, box, cone, cyl, ico, lathe, prism, torus, uniforms,
 } from './assets';
 import {
-  BRIDGE, CAMP, FALLS, HUT, ISLET, LIGHTHOUSE, MUSHROOMS, NOTES, PLAZA, RAMPS, ROADS, RUINS,
-  STREAM_BRIDGE, WINDMILL, islandRadius,
+  BRIDGES, CAMP, FALLS, GEYSERS, HUT, ISLET, LIGHTHOUSE, MUSHROOMS, NOTES, OBSERVATORY, ORIEL, PLAZA, RAMPS, ROADS, RUINS,
+  STREAM_BRIDGE, WINDMILL, WINDWARD, islandRadius,
 } from './layout';
-import { BRIDGE_Y, groundHeight, groundNormal, inClearing, isInsideIsland, roadDist, pondFactor, streamDist } from './terrain';
+import { groundHeight, groundNormal, inClearing, isInsideIsland, roadDist, pondFactor, streamDist } from './terrain';
 import { mulberry32 } from '../utils/math';
+import { RopeBridge } from './ropebridge';
 import type { Physics } from '../core/physics';
 
 const WOOD = 0xa96f4b, WOOD_D = 0x77493a, STONE = 0xc2b5bd, STONE_D = 0x948aa5, IRON = 0x3a3346;
@@ -78,11 +79,11 @@ export class Structures {
   bellLink: { body: RAPIER.RigidBody; mesh: THREE.Object3D } | null = null;
   bellPos = new THREE.Vector3();
   windows: THREE.Mesh[] = [];
-  bridgePlanks: { body: RAPIER.RigidBody; mesh: THREE.Mesh; t: number; base: THREE.Vector3 }[] = [];
-  bridgeRopes!: THREE.InstancedMesh;
-  bridgeLoad = 0; // 0..1 where the car is along the bridge (-1 = not on it)
-  bridgeLoadT = -1;
-  bridgeWobble = 0;
+  bridges: RopeBridge[] = [];
+  pinwheels: THREE.Object3D[] = [];
+  geyserCols: THREE.Mesh[] = [];
+  observatoryLamp!: THREE.Mesh;
+  observatoryWindows: THREE.Mesh[] = [];
   private stat = new Builder(); // merged static geometry
   private glow = new Builder(); // merged always-glowing bits
 
@@ -94,7 +95,10 @@ export class Structures {
     this.windmill();
     this.ruins();
     this.streamBridge();
-    this.ropeBridge();
+    this.ropeBridges();
+    this.observatory();
+    this.windward();
+    this.geysers();
     this.lampPosts();
     this.fences();
     this.notes();
@@ -370,133 +374,161 @@ export class Structures {
     }
   }
 
-  // --------------------------------------------------------- rope bridge
-  private ropeBridge() {
-    const a = new THREE.Vector3(BRIDGE.a.x, BRIDGE_Y.a, BRIDGE.a.z);
-    const b = new THREE.Vector3(BRIDGE.b.x, BRIDGE_Y.b, BRIDGE.b.z);
-    const len = a.distanceTo(b);
-    const yaw = Math.atan2(b.x - a.x, b.z - a.z);
-    const n = Math.floor(len / 0.62);
-    const plankGeo = new Builder().add(box(BRIDGE.width, 0.12, 0.5), 0xffffff, M(), { vary: 0.12 }).build();
-    const r = mulberry32(3);
-    for (let i = 0; i < n; i++) {
-      const t = (i + 0.5) / n;
-      const p = a.clone().lerp(b, t);
-      p.y -= Math.sin(t * Math.PI) * 0.5;
-      const m = new THREE.Mesh(plankGeo, new THREE.MeshStandardMaterial({ color: new THREE.Color(i % 3 ? WOOD : 0xb27a55).offsetHSL(0, 0, (r() - 0.5) * 0.08), roughness: 0.85, flatShading: true }));
-      m.castShadow = true; m.receiveShadow = true;
-      m.position.copy(p);
-      m.rotation.y = yaw;
-      m.rotation.z = (r() - 0.5) * 0.04;
-      this.group.add(m);
-      const body = this.physics.world.createRigidBody(
-        RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(p.x, p.y, p.z)
-          .setRotation(new THREE.Quaternion().setFromEuler(m.rotation)),
-      );
-      const c = this.physics.world.createCollider(RAPIER.ColliderDesc.cuboid(BRIDGE.width / 2, 0.08, 0.34).setFriction(1.0), body);
-      this.physics.tag(c, 'plank');
-      this.bridgePlanks.push({ body, mesh: m, t, base: p.clone() });
+  // --------------------------------------------------------- rope bridges
+  private ropeBridges() {
+    for (const def of BRIDGES) {
+      const br = new RopeBridge(def, this.physics, this.group, this.stat);
+      this.bridges.push(br);
+      for (const l of br.lampSpots) this.addLamp(l.x, l.z, 0);
     }
-    // end posts with lanterns
-    for (const [p, dirSign] of [[a, 1], [b, -1]] as [THREE.Vector3, number][]) {
-      for (const s of [-1, 1]) {
-        const px = p.x + Math.cos(yaw) * s * (BRIDGE.width / 2 + 0.3) - Math.sin(yaw) * 0.6 * dirSign;
-        const pz = p.z - Math.sin(yaw) * s * (BRIDGE.width / 2 + 0.3) - Math.cos(yaw) * 0.6 * dirSign;
-        const gy = groundHeight(px, pz);
-        this.stat.add(cyl(0.18, 0.24, 2.6, 6), WOOD_D, M(px, gy + 1.1, pz), { ao: 0.3 });
-        this.stat.add(ico(0.26, 0), WOOD_D, M(px, gy + 2.45, pz));
-        this.physics.cylFixed(px, gy + 1.2, pz, 0.24, 1.2, 'fence');
-      }
-      this.addLamp(p.x + Math.cos(yaw) * (BRIDGE.width / 2 + 1.2) - Math.sin(yaw) * 0.9 * dirSign,
-        p.z - Math.sin(yaw) * (BRIDGE.width / 2 + 1.2) - Math.cos(yaw) * 0.9 * dirSign, 0);
-    }
-    // ropes (hand rails + hangers): instanced segments updated every frame
-    const segGeo = new THREE.CylinderGeometry(0.035, 0.035, 1, 4);
-    segGeo.translate(0, 0.5, 0);
-    segGeo.rotateX(Math.PI / 2);
-    this.bridgeRopes = new THREE.InstancedMesh(segGeo, new THREE.MeshStandardMaterial({ color: 0xd8c39a, roughness: 1 }), (n + 1) * 2 + n * 2);
-    this.bridgeRopes.frustumCulled = false;
-    this.bridgeRopes.castShadow = true;
-    this.group.add(this.bridgeRopes);
-    // invisible side rails following the ropes so the car is not tipped into the void
-    const mid = a.clone().lerp(b, 0.5);
-    for (const s of [-1, 1]) {
-      const ox = Math.cos(yaw) * s * (BRIDGE.width / 2 + 0.2), oz = -Math.sin(yaw) * s * (BRIDGE.width / 2 + 0.2);
-      for (let k = 0; k < 4; k++) {
-        const t = (k + 0.5) / 4;
-        const p = a.clone().lerp(b, t);
-        this.physics.boxFixed(p.x + ox, p.y - 0.2, p.z + oz, 0.1, 1.4, len / 8 + 0.2, yaw, 'rope');
-      }
-    }
-    void mid;
   }
 
   updateBridge(dt: number, time: number, carPos: THREE.Vector3 | null) {
-    if (!this.bridgePlanks.length) return;
-    const a = this.bridgePlanks[0].base, b = this.bridgePlanks[this.bridgePlanks.length - 1].base;
-    let target = -1;
-    if (carPos) {
-      const ab = b.clone().sub(a);
-      const t = carPos.clone().sub(a).dot(ab) / ab.lengthSq();
-      const lateral = carPos.clone().sub(a.clone().addScaledVector(ab, t));
-      lateral.y = 0;
-      if (t > -0.05 && t < 1.05 && lateral.length() < 2.2 && Math.abs(carPos.y - (a.y + (b.y - a.y) * t)) < 2.5) target = t;
+    for (const b of this.bridges) b.update(dt, time, carPos);
+  }
+
+  // ---------------------------------------------------------- observatory
+  private observatory() {
+    const { x, z } = OBSERVATORY;
+    const y = groundHeight(x, z) - 0.15;
+    const P = (g: THREE.BufferGeometry, c: number, m: THREE.Matrix4, o = {}) => this.place(g, c, x, y, z, 0, m, o);
+    P(cyl(4.9, 5.3, 0.6, 14), STONE_D, M(0, 0.2, 0), { jitter: 0.05, vary: 0.1 });
+    P(cyl(4.2, 4.5, 3.4, 14), 0xe9dcc6, M(0, 2.1, 0), { ao: 0.35, vary: 0.04 });
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      P(box(0.35, 3.5, 0.3), STONE, M(Math.cos(a) * 4.42, 2.1, Math.sin(a) * 4.42, 0, -a, 0), { jitter: 0.02 });
     }
-    if (target >= 0) {
-      if (this.bridgeLoadT < 0) this.bridgeWobble = 1;
-      this.bridgeLoadT = target;
-      this.bridgeLoad = Math.min(1, this.bridgeLoad + dt * 3);
-    } else {
-      this.bridgeLoad = Math.max(0, this.bridgeLoad - dt * 1.5);
+    P(cyl(4.6, 4.6, 0.35, 16), STONE, M(0, 3.9, 0));
+    // ribbed copper dome with an open slit facing north-east
+    const dome = new Builder();
+    const segs = 16;
+    for (let i = 0; i < segs; i++) {
+      const a0 = (i / segs) * Math.PI * 2;
+      if (i === 2 || i === 3) continue; // the slit
+      const g = new THREE.SphereGeometry(4.25, 2, 8, a0, (Math.PI * 2) / segs, 0, Math.PI / 2);
+      dome.add(g, i % 2 ? 0x3f9a8f : 0x358a80, M(0, 0, 0), { vary: 0.04 });
     }
-    this.bridgeWobble = Math.max(0, this.bridgeWobble - dt * 0.35);
-    const yaw = Math.atan2(b.x - a.x, b.z - a.z);
-    const side = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-    const tmpQ = new THREE.Quaternion();
-    const e = new THREE.Euler();
-    const pts: THREE.Vector3[] = [];
-    for (const p of this.bridgePlanks) {
-      const t = p.t;
-      const env = Math.sin(t * Math.PI);
-      const load = this.bridgeLoad * 0.75 * Math.exp(-(((t - this.bridgeLoadT) / 0.22) ** 2)) * env;
-      const sway = Math.sin(time * 1.6 + t * 2) * 0.05 * env + Math.sin(time * 7 - t * 9) * 0.12 * this.bridgeWobble * env;
-      const y = p.base.y - load + Math.sin(time * 1.2 + t * 4) * 0.02 * env;
-      const pos = p.base.clone().addScaledVector(side, sway);
-      pos.y = y;
-      const roll = Math.cos(time * 1.6 + t * 2) * 0.04 * env + Math.sin(time * 6 - t * 8) * 0.08 * this.bridgeWobble * env;
-      e.set(0, yaw, roll, 'YXZ');
-      tmpQ.setFromEuler(e);
-      p.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
-      p.body.setNextKinematicRotation({ x: tmpQ.x, y: tmpQ.y, z: tmpQ.z, w: tmpQ.w });
-      p.mesh.position.copy(pos);
-      p.mesh.quaternion.copy(tmpQ);
-      pts.push(pos);
+    dome.add(new THREE.SphereGeometry(0.45, 8, 6), 0xc99a3f, M(0, 4.25, 0));
+    const domeMesh = new THREE.Mesh(dome.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.35, flatShading: true, side: THREE.DoubleSide }));
+    domeMesh.position.set(x, y + 4.05, z);
+    domeMesh.castShadow = true;
+    this.group.add(domeMesh);
+    // the telescope pokes out of the slit
+    const aT = ((2.5 / segs) * Math.PI * 2);
+    const tel = new Builder()
+      .add(cyl(0.45, 0.6, 5.2, 12), 0xc99a3f, M(0, 2.6, 0), { vary: 0.05 })
+      .add(cyl(0.65, 0.65, 0.4, 12), 0x3a3346, M(0, 5.1, 0))
+      .add(cyl(0.62, 0.62, 0.3, 12), 0x3a3346, M(0, 0.6, 0))
+      .build();
+    const telMesh = new THREE.Mesh(tel, MAT.metal);
+    telMesh.position.set(x + Math.cos(aT) * 1.2, y + 4.4, z + Math.sin(aT) * 1.2);
+    telMesh.rotation.set(Math.sin(aT) * 0.75, 0, -Math.cos(aT) * 0.75);
+    telMesh.castShadow = true;
+    this.group.add(telMesh);
+    // door, steps, windows
+    const doorA = Math.atan2(ORIEL.z - z, ORIEL.x - x);
+    const dx = Math.cos(doorA), dz = Math.sin(doorA);
+    const yawD = Math.atan2(dx, dz);
+    this.stat.add(box(1.4, 2.3, 0.4), PLUM, M(x + dx * 4.4, y + 1.55, z + dz * 4.4, 0, yawD, 0));
+    this.stat.add(box(2.2, 0.25, 1.2), STONE, M(x + dx * 5.0, y + 0.3, z + dz * 5.0, 0, yawD, 0));
+    for (const off of [-1.1, 1.1, 2.4]) {
+      const a = doorA + off;
+      const w = new THREE.Mesh(new THREE.CircleGeometry(0.38, 12), MAT.lamp.clone());
+      w.position.set(x + Math.cos(a) * 4.62, y + 2.6, z + Math.sin(a) * 4.62);
+      w.rotation.y = Math.atan2(Math.cos(a), Math.sin(a));
+      this.group.add(w);
+      this.observatoryWindows.push(w);
     }
-    // ropes
-    const m = new THREE.Matrix4();
-    const up = new THREE.Vector3(0, 0, 1);
-    const q = new THREE.Quaternion();
-    let k = 0;
-    const seg = (p0: THREE.Vector3, p1: THREE.Vector3) => {
-      const d = p1.clone().sub(p0);
-      const l = d.length();
-      q.setFromUnitVectors(up, d.normalize());
-      m.compose(p0, q, new THREE.Vector3(1, 1, l));
-      this.bridgeRopes.setMatrixAt(k++, m);
-    };
-    for (const s of [-1, 1]) {
-      let prev: THREE.Vector3 | null = null;
-      for (let i = 0; i < pts.length; i++) {
-        const deck = pts[i].clone().addScaledVector(side, s * (BRIDGE.width / 2 + 0.05));
-        const rail = deck.clone();
-        rail.y += 1.0 + Math.sin((i / pts.length) * Math.PI) * 0.25;
-        if (prev) seg(prev, rail);
-        if (i % 2 === 0) seg(deck, rail);
-        prev = rail;
+    // the answering lantern on the dome's finial
+    this.observatoryLamp = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32, 1), new THREE.MeshStandardMaterial({ color: 0x40301c, emissive: 0xffc46b, emissiveIntensity: 0.0 }));
+    this.observatoryLamp.position.set(x, y + 9.0, z);
+    this.group.add(this.observatoryLamp);
+    this.stat.add(box(0.08, 0.6, 0.08), IRON, M(x, y + 8.55, z));
+    this.physics.cylFixed(x, y + 2.5, z, 4.7, 2.6, 'building');
+    this.physics.fixed(RAPIER.ColliderDesc.ball(4.3), x, y + 4.05, z, undefined, 'building');
+    // a star-chart table and a bench outside
+    const tx = x + dx * 7 + dz * 2.5, tz = z + dz * 7 - dx * 2.5;
+    const ty = groundHeight(tx, tz);
+    this.stat.add(box(1.6, 0.1, 1.0), WOOD, M(tx, ty + 0.85, tz, 0, yawD + 0.4, 0));
+    this.stat.add(box(1.4, 0.02, 0.8), 0x2f3a6e, M(tx, ty + 0.91, tz, 0, yawD + 0.4, 0));
+    for (const [sx, sz] of [[-0.65, -0.35], [0.65, -0.35], [-0.65, 0.35], [0.65, 0.35]]) {
+      this.stat.add(box(0.08, 0.85, 0.08), WOOD_D, M(tx, ty + 0.42, tz, 0, yawD + 0.4, 0).multiply(M(sx, 0, sz)));
+    }
+    this.physics.boxFixed(tx, ty + 0.5, tz, 0.8, 0.5, 0.5, yawD + 0.4, 'bench');
+  }
+
+  // ------------------------------------------------------- windward isle
+  private windward() {
+    const { x, z } = WINDWARD;
+    const cols = [0xe8634e, 0xffc23d, 0x5fb3c9, 0xff8fb0, 0xfff1d8];
+    const r = mulberry32(44);
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2 + r() * 0.4;
+      const d = 4 + r() * 4.5;
+      const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
+      if (GEYSERS.some((g) => Math.hypot(px - g.x, pz - g.z) < 3.5 || Math.hypot(px - g.tx, pz - g.tz) < 4)) continue;
+      const gy = groundHeight(px, pz);
+      const h = 1.6 + r() * 1.4;
+      this.stat.add(cyl(0.04, 0.05, h, 4), 0xe9e0d0, M(px, gy + h / 2, pz));
+      const wheel = new THREE.Group();
+      const b = new Builder();
+      for (let k = 0; k < 4; k++) {
+        const s = new THREE.Shape();
+        s.moveTo(0, 0); s.lineTo(0.42, 0.06); s.lineTo(0.08, 0.38); s.lineTo(0, 0);
+        b.add(new THREE.ShapeGeometry(s), cols[(i + k) % cols.length], M(0, 0, 0, 0, 0, (k / 4) * Math.PI * 2));
       }
+      b.add(new THREE.SphereGeometry(0.05, 6, 4), 0x3a3346, M(0, 0, 0.02));
+      const m = new THREE.Mesh(b.build(), new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.6 }));
+      wheel.add(m);
+      wheel.position.set(px, gy + h, pz);
+      wheel.rotation.y = r() * Math.PI * 2;
+      wheel.userData.speed = 2 + r() * 4;
+      this.group.add(wheel);
+      this.pinwheels.push(wheel);
     }
-    this.bridgeRopes.count = k;
-    this.bridgeRopes.instanceMatrix.needsUpdate = true;
+    // a little stone arch framing the garden
+    const ax = x + 5.5, az = z + 5.5;
+    const ag = groundHeight(ax, az);
+    for (const s of [-1, 1]) this.stat.add(box(0.6, 2.8, 0.6), STONE, M(ax + s * 1.6, ag + 1.3, az - s * 1.6, 0, Math.PI / 4, 0), { jitter: 0.05, topColor: MOSS, topAmount: 0.6 });
+    this.stat.add(box(4.6, 0.5, 0.7), STONE, M(ax, ag + 2.9, az, 0, -Math.PI / 4, 0), { jitter: 0.05, topColor: MOSS, topAmount: 0.8 });
+    for (const s of [-1, 1]) this.physics.boxFixed(ax + s * 1.6, ag + 1.3, az - s * 1.6, 0.3, 1.4, 0.3, Math.PI / 4, 'stone');
+  }
+
+  // ------------------------------------------------------------- geysers
+  private geysers() {
+    const colMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      uniforms: { uTime: uniforms.uTime },
+      vertexShader: `varying vec2 vUv; varying float vY; void main(){ vUv = uv; vY = position.y; vec3 p = position; p.xz *= 1.0 + uv.y * 0.6; gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }`,
+      fragmentShader: /* glsl */`uniform float uTime; varying vec2 vUv;
+        float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float n(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f); return mix(mix(h(i),h(i+vec2(1,0)),f.x), mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x), f.y); }
+        void main(){
+          float s = n(vec2(vUv.x * 10.0 + vUv.y * 3.0, vUv.y * 4.0 - uTime * 2.4)) * 0.6 + n(vec2(vUv.x * 22.0 - vUv.y * 5.0, vUv.y * 8.0 - uTime * 3.6)) * 0.4;
+          float streak = smoothstep(0.55, 0.85, s);
+          float a = streak * (1.0 - vUv.y) * smoothstep(0.0, 0.08, vUv.y) * 0.55;
+          gl_FragColor = vec4(vec3(0.85, 0.95, 1.0) * a, 1.0);
+        }`,
+    });
+    const colGeo = new THREE.CylinderGeometry(1.3, 1.0, 7, 20, 6, true);
+    colGeo.translate(0, 3.5, 0);
+    for (const g of GEYSERS) {
+      const y = groundHeight(g.x, g.z);
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        this.stat.add(blob(0.5, 0, 0.2, 800 + i, 0.7), STONE, M(g.x + Math.cos(a) * 2.2, y + 0.1, g.z + Math.sin(a) * 2.2), { topColor: MOSS, topAmount: 0.5 });
+      }
+      this.stat.add(cyl(1.9, 2.1, 0.18, 16), STONE_D, M(g.x, y + 0.02, g.z));
+      for (let i = 0; i < 6; i++) this.stat.add(box(3.4, 0.06, 0.12), IRON, M(g.x, y + 0.14, g.z, 0, (i / 6) * Math.PI, 0));
+      const col = new THREE.Mesh(colGeo, colMat);
+      col.position.set(g.x, y, g.z);
+      col.renderOrder = 6;
+      this.group.add(col);
+      this.geyserCols.push(col);
+      const pool = makeLightPool(g.x, g.z, 7, 0x9fd8ff);
+      (pool.material as THREE.MeshBasicMaterial).opacity = 0.5;
+      this.group.add(pool);
+    }
   }
 
   // ---------------------------------------------------------- lamp posts
@@ -778,6 +810,7 @@ export class Structures {
   /** windows & lamps react to the night amount and lit beacons */
   updateLights(dt: number, night: number) {
     MAT.lamp.emissiveIntensity = 0.15 + night * 2.6;
+    for (const p of this.pinwheels) p.children[0].rotation.z += dt * p.userData.speed;
     for (const l of this.lamps) {
       const target = Math.max(l.target, smooth01(night));
       l.on += (target - l.on) * Math.min(1, dt * 2.5);

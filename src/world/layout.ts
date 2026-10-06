@@ -10,21 +10,55 @@ export function islandRadius(th: number) {
   return 80 + 6 * Math.sin(3 * th + 0.7) + 4 * Math.sin(5 * th + 2.1) + 2.2 * Math.sin(11 * th + 0.3);
 }
 
-// ---------- Far islet + rope bridge ----------
-export const BRIDGE_ANGLE = 0.72;
-const rEdge = islandRadius(BRIDGE_ANGLE);
-const dir = { x: Math.cos(BRIDGE_ANGLE), z: Math.sin(BRIDGE_ANGLE) };
-export const ISLET_R = 10.5;
-export const ISLET = { x: dir.x * (rEdge + 22 + ISLET_R), z: dir.z * (rEdge + 22 + ISLET_R) };
-export function isletRadius(th: number) {
-  return ISLET_R + 1.1 * Math.sin(3 * th + 1) + 0.7 * Math.sin(5 * th + 0.5);
+// ---------- Islets ----------
+// The archipelago: the main isle plus three small islands floating around it.
+export interface IsletDef { id: 'far' | 'observatory' | 'windward'; x: number; z: number; r: number; seed: number; angle: number; }
+function isletAt(id: IsletDef['id'], angle: number, gap: number, r: number, seed: number): IsletDef {
+  const d = islandRadius(angle) + gap + r;
+  return { id, x: Math.cos(angle) * d, z: Math.sin(angle) * d, r, seed, angle };
 }
-export const BRIDGE = {
-  a: { x: dir.x * (rEdge - 3), z: dir.z * (rEdge - 3) },
-  b: { x: ISLET.x - dir.x * (ISLET_R - 3), z: ISLET.z - dir.z * (ISLET_R - 3) },
-  y: 1.35,
-  width: 2.8,
-};
+export const ISLETS: IsletDef[] = [
+  isletAt('far', 0.72, 22, 10.5, 1),
+  isletAt('observatory', -2.33, 24, 12.5, 2),
+  isletAt('windward', 0.0, 31, 11.5, 3),
+];
+export function isletRadiusOf(isl: IsletDef, th: number) {
+  return isl.r + 1.1 * Math.sin(3 * th + isl.seed) + 0.7 * Math.sin(5 * th + 0.5 * isl.seed);
+}
+
+export const BRIDGE_WIDTH = 3.6;
+export interface BridgeDef { id: string; a: { x: number; z: number }; b: { x: number; z: number }; angle: number; width: number; }
+function bridgeTo(isl: IsletDef): BridgeDef {
+  const rEdge = islandRadius(isl.angle);
+  const dx = Math.cos(isl.angle), dz = Math.sin(isl.angle);
+  return {
+    id: isl.id,
+    a: { x: dx * (rEdge - 3), z: dz * (rEdge - 3) },
+    b: { x: isl.x - dx * (isl.r - 3), z: isl.z - dz * (isl.r - 3) },
+    angle: isl.angle,
+    width: BRIDGE_WIDTH,
+  };
+}
+export const BRIDGES: BridgeDef[] = [bridgeTo(ISLETS[0]), bridgeTo(ISLETS[1])];
+
+// legacy aliases (the first islet / bridge)
+export const ISLET = ISLETS[0];
+export const ISLET_R = ISLETS[0].r;
+export const BRIDGE = { ...BRIDGES[0], y: 1.35 };
+export const BRIDGE_ANGLE = ISLETS[0].angle;
+export function isletRadius(th: number) { return isletRadiusOf(ISLETS[0], th); }
+const dir = { x: Math.cos(BRIDGE_ANGLE), z: Math.sin(BRIDGE_ANGLE) };
+
+export const OBSERVATORY = { x: ISLETS[1].x - 1.5, z: ISLETS[1].z - 2.5 };
+export const ORIEL = { x: ISLETS[1].x + 3.2, z: ISLETS[1].z + 3.6 };
+export const WINDWARD = ISLETS[2];
+
+/** Wind geysers: step on the vent and the wind throws you across the gap. */
+export interface GeyserDef { x: number; z: number; tx: number; tz: number; flight: number; }
+export const GEYSERS: GeyserDef[] = [
+  { x: 79, z: 1, tx: WINDWARD.x - 6, tz: 0.5, flight: 2.1 },
+  { x: WINDWARD.x - 4, z: 6.5, tx: 71, tz: 8, flight: 2.3 },
+];
 
 // ---------- Landmarks ----------
 export const PLAZA = { x: 4, z: 44 };
@@ -73,6 +107,11 @@ export const ROADS: Road[] = [
   { pts: smoothPath([[38, 22], [47, 31], [54, 40], [BRIDGE.a.x, BRIDGE.a.z]], 2), width: 2.6 },
   { pts: smoothPath([[-41, -44], [-30, -56], [-12, -64], [8, -66], [26, -58], [40, -44], [44, -32]], 2), width: 2.4 },
   { pts: smoothPath([[ISLET.x - dir.x * 7, ISLET.z - dir.z * 7], [ISLET.x, ISLET.z]], 2), width: 2.4 },
+  // spur from the stone circle to the observatory bridge
+  { pts: smoothPath([[-41, -44], [-47, -50], [BRIDGES[1].a.x, BRIDGES[1].a.z]], 2), width: 2.4 },
+  { pts: smoothPath([[BRIDGES[1].b.x, BRIDGES[1].b.z], [ORIEL.x - 1, ORIEL.z - 1]], 2), width: 2.2 },
+  // east trail to the wind geyser
+  { pts: smoothPath([[47, -8], [60, -4], [72, 0], [GEYSERS[0].x - 2, GEYSERS[0].z]], 2), width: 2.4 },
 ];
 
 /** Where the rim road crosses the stream: a little wooden bridge. */
@@ -85,7 +124,8 @@ export const BEACONS: BeaconDef[] = [
   { id: 1, name: 'Windmill Beacon', x: 41, z: -31, hint: 'on the windy hill to the north-east' },
   { id: 2, name: 'Stone Circle Beacon', x: -42, z: -44, hint: 'inside the old stone circle' },
   { id: 3, name: 'Falls Beacon', x: -56, z: -1, hint: 'where the river falls into the sky' },
-  { id: 4, name: 'Far Islet Beacon', x: ISLET.x + dir.x * 1.5, z: ISLET.z + dir.z * 1.5, hint: 'across the rope bridge' },
+  { id: 4, name: 'Far Islet Beacon', x: ISLET.x + dir.x * 1.5, z: ISLET.z + dir.z * 1.5, hint: 'across the rope bridge, south-east' },
+  { id: 5, name: 'Windward Beacon', x: WINDWARD.x + 3, z: WINDWARD.z - 2.5, hint: 'ride the wind geyser on the east rim' },
 ];
 export const FINALE = { x: 0, z: -0.5 };
 
@@ -103,6 +143,10 @@ export const NOTES: NoteDef[] = [
     body: 'Rope bridge. One vehicle at a time. Do not look down. (There is no down. Only clouds.)' },
   { x: CAMP.x + 3.5, z: CAMP.z + 2.5, yaw: 0.3, title: "The keeper's secret camp",
     body: "You found my hiding place. From here you can see every beacon on the isle. When they are all burning, the lighthouse will answer. Go on. I'll watch from here." },
+  { x: WINDWARD.x - 2, z: WINDWARD.z + 6, yaw: 1.2, title: 'Pinned to a pinwheel',
+    body: 'The wind out here never stops. Oriel planted this garden so the geyser would have something to sing to. Hold on tight on the way back.' },
+  { x: OBSERVATORY.x + 5, z: OBSERVATORY.z - 3, yaw: -0.6, title: "Oriel's star chart",
+    body: 'A star fell tonight, just past the north rim. I am going to the observatory to see where it lands. If I am late, Wick, light the beacons for me. — O.' },
 ];
 
 // Glimmers: optional floating sparks. [x, z, height above ground]
@@ -115,6 +159,11 @@ export const GLIMMERS: number[][] = [
   [56, -44, 1.2], [36, 10, 1.2], [53, 25, 1.2],
   [ISLET.x + 5, ISLET.z + 2, 1.2], [(BRIDGE.a.x + BRIDGE.b.x) / 2, (BRIDGE.a.z + BRIDGE.b.z) / 2, 2.2],
   [70, 10, 1.2], [-20, 56, 1.2], [28, 58, 1.2], [-60, 40, 1.2], [62, -12, 1.2],
+  // the new islands
+  [(BRIDGES[1].a.x + BRIDGES[1].b.x) / 2, (BRIDGES[1].a.z + BRIDGES[1].b.z) / 2, 2.2],
+  [OBSERVATORY.x - 5, OBSERVATORY.z + 3, 1.2], [WINDWARD.x + 6, WINDWARD.z + 4, 1.2],
+  [95, 0.8, 9.5], [105, 0.7, 11.5], // high in the geyser arc
+  [WINDWARD.x - 1, WINDWARD.z - 7, 1.2],
 ];
 
 // Jump ramps: position, yaw (direction of travel), with glimmer arcs above.
@@ -136,8 +185,9 @@ export const PADS: { x: number; z: number; r: number }[] = [
   ...BEACONS.map((b) => ({ x: b.x, z: b.z, r: 5 })),
   { x: RUINS.x, z: RUINS.z, r: 13 },
   { x: CAMP.x, z: CAMP.z, r: 6 },
-  { x: BRIDGE.a.x, z: BRIDGE.a.z, r: 4.5 },
-  { x: BRIDGE.b.x, z: BRIDGE.b.z, r: 4.5 },
+  ...BRIDGES.flatMap((b) => [{ x: b.a.x, z: b.a.z, r: 5 }, { x: b.b.x, z: b.b.z, r: 5 }]),
+  ...GEYSERS.map((g) => ({ x: g.x, z: g.z, r: 4.5 })),
+  { x: OBSERVATORY.x, z: OBSERVATORY.z, r: 7 },
 ];
 
 /** Areas kept free of trees / grass clumps. */
@@ -152,4 +202,9 @@ export const CLEARINGS: { x: number; z: number; r: number }[] = [
   ...RAMPS.map((r) => ({ x: r.x, z: r.z, r: 6 })),
   ...MUSHROOMS.map((m) => ({ x: m.x, z: m.z, r: 3.5 * m.s })),
   ...NOTES.map((n) => ({ x: n.x, z: n.z, r: 1.5 })),
+  ...GEYSERS.map((g) => ({ x: g.x, z: g.z, r: 5 })),
+  ...GEYSERS.map((g) => ({ x: g.tx, z: g.tz, r: 7 })),
+  ...BRIDGES.flatMap((b) => [{ x: b.a.x, z: b.a.z, r: 4 }, { x: b.b.x, z: b.b.z, r: 4 }]),
+  { x: OBSERVATORY.x, z: OBSERVATORY.z, r: 7.5 },
+  { x: ORIEL.x, z: ORIEL.z, r: 3 },
 ];

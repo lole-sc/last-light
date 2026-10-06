@@ -1,6 +1,6 @@
 // Thin DOM layer for HUD, modals, map and title screens.
 import * as THREE from 'three';
-import { BEACONS, ISLET, NOTES, islandRadius, isletRadius } from '../world/layout';
+import { BEACONS, GEYSERS, NOTES, ORIEL } from '../world/layout';
 import { HALF, groundColor, groundHeight, groundNormal, isInsideIsland, isWater } from '../world/terrain';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -14,7 +14,7 @@ export class UI {
 
   constructor() {
     const flames = $('flames');
-    for (let i = 0; i < 5; i++) flames.appendChild(document.createElement('i'));
+    for (let i = 0; i < BEACONS.length; i++) flames.appendChild(document.createElement('i'));
     const fin = document.createElement('i');
     fin.className = 'final';
     flames.appendChild(fin);
@@ -38,7 +38,7 @@ export class UI {
   setBeacons(lit: boolean[], finaleLit: boolean, title: string, hint: string) {
     const items = $('flames').children;
     lit.forEach((l, i) => items[i].classList.toggle('lit', l));
-    items[5].classList.toggle('lit', finaleLit);
+    items[BEACONS.length].classList.toggle('lit', finaleLit);
     $('obj-title').textContent = title;
     $('obj-hint').textContent = hint;
   }
@@ -100,6 +100,10 @@ export class UI {
   setQualityButtons(q: string) {
     $('seg-quality').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.q === q));
   }
+  setSkyButtons(sky: string) {
+    $('seg-sky').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.sky === sky));
+  }
+  setSpeedLines(on: boolean) { $('speedlines').classList.toggle('on', on); }
   setSoundButtons(sound: boolean, music: boolean) {
     $('seg-sound').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.s === 'on') === sound));
     $('seg-music').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.m === 'on') === music));
@@ -144,11 +148,10 @@ export class UI {
     // paper-ish outline
     g.globalCompositeOperation = 'destination-over';
     g.strokeStyle = 'rgba(255,243,221,0.0)';
-    void islandRadius; void isletRadius; void ISLET;
     this.mapBase = c;
   }
 
-  drawMap(player: THREE.Vector3, heading: number, lit: boolean[], finaleReady: boolean, finaleLit: boolean, notesRead: boolean[]) {
+  drawMap(player: THREE.Vector3, heading: number, lit: boolean[], finaleReady: boolean, finaleLit: boolean, notesRead: boolean[], orielKnown = false) {
     if (!this.mapBase) this.buildMapBase();
     const cv = $<HTMLCanvasElement>('map-canvas');
     const g = cv.getContext('2d')!;
@@ -193,6 +196,24 @@ export class UI {
       g.font = 'italic 500 14px Fraunces, serif';
       g.textAlign = 'center';
       g.fillText('the lighthouse', x, y + 4);
+    }
+    // wind geysers
+    for (const gz of GEYSERS) {
+      const [x, y] = toPx(gz.x, gz.z);
+      g.strokeStyle = 'rgba(190,230,255,0.9)'; g.lineWidth = 2;
+      g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.stroke();
+      const [tx, ty] = toPx(gz.tx, gz.tz);
+      g.setLineDash([3, 5]);
+      g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo((x + tx) / 2, (y + ty) / 2 - 30, tx, ty); g.stroke();
+      g.setLineDash([]);
+    }
+    // Oriel
+    if (orielKnown) {
+      const [x, y] = toPx(ORIEL.x, ORIEL.z);
+      g.fillStyle = '#9fdbe6'; g.shadowColor = '#9fdbe6'; g.shadowBlur = 14;
+      g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.fill(); g.shadowBlur = 0;
+      g.font = '500 13px Outfit, sans-serif'; g.textAlign = 'center'; g.fillStyle = '#fff3dd';
+      g.fillText('Oriel', x, y - 14);
     }
     // player
     const [px, py] = toPx(player.x, player.z);
