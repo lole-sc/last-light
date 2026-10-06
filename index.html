@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Last Light</title>
+  <meta name="description" content="Last Light — drive a tiny lantern buggy around a floating island and relight its beacons before nightfall. A browser game built with Three.js and Rapier." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%232b2f6e'/%3E%3Cpath d='M32 12c6 10 12 14 12 24a12 12 0 0 1-24 0c0-10 6-14 12-24z' fill='%23ffb347'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..700,100;1,9..144,400..700,100&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- Loader -->
+  <div id="loader">
+    <div class="loader-inner">
+      <div class="loader-flame"><span></span></div>
+      <h1 class="brand">Last Light</h1>
+      <p class="loader-status" id="loader-status">gathering clouds…</p>
+      <div class="loader-bar"><i id="loader-bar"></i></div>
+    </div>
+  </div>
+
+  <!-- Title over the establishing shot -->
+  <div id="title" class="hidden">
+    <div class="title-block">
+      <p class="eyebrow">a tiny isle at the edge of dusk</p>
+      <h1 class="brand big">Last Light</h1>
+      <p class="tagline">The sun is going down over the floating isle.<br/>Drive Wick, the lantern buggy, and relight the five beacons before night falls.</p>
+      <p class="press">Press any key to explore</p>
+    </div>
+    <div class="title-foot"><span>Sound on · headphones recommended</span><span id="title-quality"></span></div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div class="objective">
+      <div class="flames" id="flames"></div>
+      <div class="obj-text">
+        <div class="obj-title" id="obj-title">Relight the beacons</div>
+        <div class="obj-hint" id="obj-hint"></div>
+      </div>
+    </div>
+    <div class="top-right">
+      <div class="pill" id="glimmers" title="Glimmers found"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg><b id="glimmer-count">0</b><span id="glimmer-total">/0</span></div>
+      <div class="pill timer" id="timer">0:00</div>
+      <button class="icon-btn" id="btn-sound" title="Sound (N)"><svg viewBox="0 0 24 24" id="ico-sound"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+      <button class="icon-btn" id="btn-map" title="Map (M)"><svg viewBox="0 0 24 24"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 4v14M15 6v14" stroke="currentColor" stroke-width="1.8"/></svg></button>
+      <button class="icon-btn" id="btn-menu" title="Menu (Esc)"><svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    </div>
+    <div id="pointer" class="pointer"><div class="pointer-arrow"></div><span id="pointer-dist"></span></div>
+    <div id="prompt" class="prompt"><kbd>E</kbd><span id="prompt-text">Read</span></div>
+    <div id="kindle" class="kindle"><span>Kindling…</span></div>
+    <div id="controls" class="controls">
+      <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>drive</span></div>
+      <div><kbd>⇧</kbd><span>boost</span></div>
+      <div><kbd class="wide">Space</kbd><span>hop</span></div>
+      <div><kbd>E</kbd><span>interact</span></div>
+      <div><kbd>R</kbd><span>respawn</span></div>
+      <div><kbd>M</kbd><span>map</span></div>
+      <div class="muted"><span>drag to look · scroll to zoom · H hides this</span></div>
+    </div>
+    <div id="toast" class="toast"></div>
+    <div id="banner" class="banner"><small id="banner-small"></small><h2 id="banner-big"></h2></div>
+  </div>
+
+  <!-- Note reader -->
+  <div id="note" class="modal hidden">
+    <div class="note-card">
+      <p class="eyebrow" id="note-eyebrow">Keeper's notes</p>
+      <h3 id="note-title"></h3>
+      <p id="note-body"></p>
+      <p class="hint"><kbd>E</kbd> or <kbd>Esc</kbd> to close</p>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map" class="modal hidden">
+    <div class="map-card">
+      <canvas id="map-canvas" width="720" height="720"></canvas>
+      <div class="map-legend">
+        <span><i class="dot beacon"></i>Beacon</span><span><i class="dot lit"></i>Lit</span><span><i class="dot note"></i>Keeper's note</span><span><i class="dot you"></i>Wick</span>
+      </div>
+      <p class="hint"><kbd>M</kbd> to close</p>
+    </div>
+  </div>
+
+  <!-- Pause -->
+  <div id="pause" class="modal hidden">
+    <div class="menu-card">
+      <h2 class="brand">Paused</h2>
+      <button class="menu-btn primary" data-act="resume">Resume</button>
+      <div class="menu-row"><span>Quality</span>
+        <div class="seg" id="seg-quality"><button data-q="low">Low</button><button data-q="medium">Medium</button><button data-q="high">High</button></div>
+      </div>
+      <div class="menu-row"><span>Sound</span><div class="seg" id="seg-sound"><button data-s="on">On</button><button data-s="off">Off</button></div></div>
+      <div class="menu-row"><span>Music</span><div class="seg" id="seg-music"><button data-m="on">On</button><button data-m="off">Off</button></div></div>
+      <button class="menu-btn" data-act="respawn">Respawn at last beacon</button>
+      <button class="menu-btn" data-act="restart">Restart the evening</button>
+      <p class="credits">Every mesh, texture and sound in this game is generated in code.<br/>Three.js · Rapier · postprocessing</p>
+    </div>
+  </div>
+
+  <!-- End card -->
+  <div id="end" class="modal hidden">
+    <div class="end-card">
+      <p class="eyebrow">the lighthouse answers</p>
+      <h2 class="brand big">The isle remembers.</h2>
+      <p class="end-sub">Every beacon is burning. The island floats up, and the night is kind.</p>
+      <div class="stats">
+        <div><b id="end-time">0:00</b><span>time</span></div>
+        <div><b id="end-glimmers">0/0</b><span>glimmers</span></div>
+        <div><b id="end-notes">0/0</b><span>notes read</span></div>
+      </div>
+      <button class="menu-btn primary" id="end-continue">Keep exploring</button>
+    </div>
+  </div>
+
+  <div id="fade" class="fade"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
