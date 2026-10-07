@@ -103,6 +103,8 @@ export class Game {
   finished = false;
   quality: QualityName = 'high';
   fpsAcc = 0; fpsFrames = 0; lowFpsTime = 0; downgraded = false;
+  slowSecs = 0; fastSecs = 0; perfCooldown = 0;
+  shadowSize = 110;
   last = performance.now();
   startGame: () => void = () => {};
   private tmp = new THREE.Vector3();
@@ -118,6 +120,7 @@ export class Game {
 
     await step(0.14, 'raising the island out of the clouds…');
     const terrain = buildTerrain();
+    terrain.mesh.matrixAutoUpdate = false;
     this.scene.add(terrain.mesh);
     this.physics.fixed(RAPIER.ColliderDesc.trimesh(terrain.vertices, terrain.indices).setFriction(0.9), 0, 0, 0, undefined, 'ground');
 
@@ -178,7 +181,11 @@ export class Game {
     await step(0.95, 'compiling shaders…');
     this.rig.update(0, this.vehicle.position, new THREE.Vector3(), new THREE.Vector3(0, 0, -1), [0, 0], 0, 0);
     this.atmo.update(0, 0, new THREE.Vector3(), 120);
+    // compile everything up-front, including things that only appear later (no hitches mid-game)
+    const hidden: THREE.Object3D[] = [];
+    this.scene.traverse((o) => { if (!o.visible) { hidden.push(o); o.visible = true; } });
     this.renderer.renderer.compile(this.scene, this.rig.camera);
+    for (const o of hidden) o.visible = false;
     // warm a few frames so the first visible frame is smooth
     for (let i = 0; i < 3; i++) { this.physics.update(1 / 60); this.renderer.render(1 / 60); await nextFrame(); }
 
@@ -387,7 +394,10 @@ export class Game {
     // world animation that runs even while paused looks odd; keep it with `running`
     if (running) this.animateWorld(dt);
     const focus = this.state === 'intro' ? new THREE.Vector3(0, 0, 0) : this.vehicle.position;
-    this.atmo.update(dt, this.time, focus, this.state === 'intro' || this.rig.mode === 'transition' || this.rig.mode === 'cinematic' ? 110 : 42);
+    // shadow frustum eases between the wide establishing size and the tight gameplay size (no popping)
+    const wide = this.state === 'intro' || this.rig.mode === 'transition' || this.rig.mode === 'cinematic' || this.rig.mode === 'shot';
+    this.shadowSize += ((wide ? 110 : 42) - this.shadowSize) * Math.min(1, dt * 1.8);
+    this.atmo.update(dt, this.time, focus, Math.round(this.shadowSize));
     this.renderer.setExposure(this.atmo.exposure);
 
     const scale = this.renderer.renderer.domElement.height / (2 * Math.tan((this.rig.camera.fov * Math.PI) / 360));
@@ -396,22 +406,33 @@ export class Game {
     (this.fireflies.material as THREE.ShaderMaterial).uniforms.uScale.value = scale;
 
     this.grassLod();
+    this.monitorPerf(dt); // may change the resolution: always before rendering, never between render and present
     this.renderer.render(dt);
     this.input.endFrame();
-    this.monitorPerf(dt);
   }
 
   private monitorPerf(dt: number) {
-    if (this.state !== 'play' && this.state !== 'intro') return;
+    // only judge performance during real gameplay, after things have settled
+    if (this.state !== 'play' || this.playTime < 6) { this.fpsAcc = 0; this.fpsFrames = 0; return; }
     this.fpsAcc += dt; this.fpsFrames++;
     if (this.fpsAcc < 1) return;
     const avgMs = (this.fpsAcc / this.fpsFrames) * 1000;
     this.fpsAcc = 0; this.fpsFrames = 0;
-    if (this.time < 4) return; // ignore the first seconds (shader warm-up)
-    // 1) dynamic resolution keeps the look and holds the frame rate
-    this.renderer.adaptResolution(avgMs);
-    // 2) only if we are already at the resolution floor and still slow, drop a preset
-    this.lowFpsTime = avgMs > 30 && this.renderer.dynScale <= 0.56 ? this.lowFpsTime + 1 : Math.max(0, this.lowFpsTime - 1);
+    this.perfCooldown -= 1;
+    this.slowSecs = avgMs > 20 ? this.slowSecs + 1 : 0;
+    this.fastSecs = avgMs < 13 ? this.fastSecs + 1 : 0;
+    // dynamic resolution with hysteresis: rare, deliberate steps instead of constant resizing
+    if (this.perfCooldown <= 0) {
+      if (this.slowSecs >= 2 && this.renderer.dynScale > 0.6) {
+        this.renderer.setDynScale(this.renderer.dynScale - 0.1);
+        this.perfCooldown = 4; this.slowSecs = 0;
+      } else if (this.fastSecs >= 6 && this.renderer.dynScale < 1) {
+        this.renderer.setDynScale(this.renderer.dynScale + 0.1);
+        this.perfCooldown = 8; this.fastSecs = 0;
+      }
+    }
+    // only if we are already at the resolution floor and still slow, drop a preset (once)
+    this.lowFpsTime = avgMs > 28 && this.renderer.dynScale <= 0.61 ? this.lowFpsTime + 1 : Math.max(0, this.lowFpsTime - 1);
     if (this.lowFpsTime >= 4 && this.quality !== 'low' && !this.downgraded) {
       this.downgraded = true;
       this.applyQuality(this.quality === 'high' ? 'medium' : 'low', false);
@@ -419,7 +440,7 @@ export class Game {
     }
   }
 
-  /** Thin out grass in chunks far from the camera's focus. */
+  /** Thin out grass in far chunks. Discrete levels with hysteresis so clumps never shimmer in and out. */
   private grassLod() {
     const f = this.rig.target;
     const q = this.renderer.preset.grass;
@@ -427,8 +448,15 @@ export class Game {
       const g = m.geometry as THREE.InstancedBufferGeometry;
       const c = g.boundingSphere!.center;
       const d = Math.hypot(c.x - f.x, c.z - f.z);
-      const lod = d < 45 ? 1 : d < 110 ? 1 - ((d - 45) / 65) * 0.7 : 0.3;
-      g.instanceCount = Math.floor((g.userData.full as number) * q * lod);
+      let lvl = (g.userData.lvl as number | undefined) ?? 0;
+      // 0 = full, 1 = half, 2 = sparse; switch only when clearly past a band edge
+      const want = d < 55 ? 0 : d < 105 ? 1 : 2;
+      if (want > lvl && d > [55, 105][lvl] + 6) lvl = want;
+      else if (want < lvl && d < [55, 105][want] - 6) lvl = want;
+      if (lvl !== g.userData.lvl || q !== g.userData.q) {
+        g.userData.lvl = lvl; g.userData.q = q;
+        g.instanceCount = Math.floor((g.userData.full as number) * q * [1, 0.5, 0.22][lvl]);
+      }
     }
   }
 
@@ -557,7 +585,7 @@ export class Game {
       for (const w of v.wheelStates) if (w.contact) this.dust(w.point, 6 * k, 1.4);
     }
     if (v.justJumped) { this.audio.jump(); for (const w of v.wheelStates) if (w.contact) this.dust(w.point, 4, 1.0); }
-    if (v.boostKick > 0.55) { this.audio.boost(); this.rig.kick(v.forward().multiplyScalar(-1), 2.5); this.rig.addShake(0.15); }
+    if (v.boostKick > 0.55) this.rig.kick(v.forward().multiplyScalar(-1), 1.2);
 
     // ---- water entry
     if (v.inWater > 0 && this.wasInWater === 0) {
@@ -569,7 +597,7 @@ export class Game {
     }
     this.wasInWater = v.inWater;
 
-    this.ui.setSpeedLines((v.boosting && Math.abs(v.speed) > 25) || v.launched > 0.3);
+    this.ui.setSpeedLines((v.boosting && Math.abs(v.speed) > 24) || v.launched > 0.3);
     this.updateHud();
   }
 

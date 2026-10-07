@@ -14,7 +14,6 @@ export class Oriel {
   private armL = new THREE.Group();
   private scarfTail = new THREE.Group();
   lantern: THREE.Mesh;
-  light = new THREE.PointLight(0xffb35c, 0, 10, 1.6);
   waving = 0;
   private t = 0;
 
@@ -87,7 +86,7 @@ export class Oriel {
       .add(torus(0.05, 0.012, 4, 8), 0x3a3346, M(0, 0.22, 0))
       .build(), MAT.std);
     const lanternG = new THREE.Group();
-    lanternG.add(this.lantern, cage, this.light);
+    lanternG.add(this.lantern, cage);
     lanternG.position.set(0, -0.82, 0.05);
     this.armL.add(lanternG);
     this.root.add(this.body);
@@ -119,6 +118,6 @@ export class Oriel {
     this.scarfTail.rotation.x = 0.4 + Math.sin(t * 5) * 0.25;
     this.scarfTail.rotation.z = Math.sin(t * 3.7) * 0.2;
     (this.lantern.material as THREE.MeshStandardMaterial).emissiveIntensity = 3 + Math.sin(t * 13) * 0.3;
-    this.light.intensity = 3 + night * 14;
+    void night;
   }
 }

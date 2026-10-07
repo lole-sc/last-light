@@ -9,9 +9,9 @@ import {
 export type QualityName = 'high' | 'medium' | 'low';
 export interface Preset { dpr: number; shadow: number; grass: number; msaa: number; tilt: boolean; shadowRadius: number; }
 export const PRESETS: Record<QualityName, Preset> = {
-  high: { dpr: 1.75, shadow: 4096, grass: 1, msaa: 4, tilt: true, shadowRadius: 3 },
-  medium: { dpr: 1.35, shadow: 2048, grass: 0.6, msaa: 2, tilt: true, shadowRadius: 2 },
-  low: { dpr: 1, shadow: 1024, grass: 0.3, msaa: 0, tilt: false, shadowRadius: 1 },
+  high: { dpr: 1.5, shadow: 2048, grass: 1, msaa: 2, tilt: true, shadowRadius: 3 },
+  medium: { dpr: 1.25, shadow: 2048, grass: 0.65, msaa: 2, tilt: true, shadowRadius: 2 },
+  low: { dpr: 1, shadow: 1024, grass: 0.35, msaa: 0, tilt: false, shadowRadius: 1 },
 };
 
 const gradeFrag = /* glsl */`
@@ -59,7 +59,10 @@ export class Renderer {
   bloom!: BloomEffect;
   tilt!: TiltShiftEffect;
   grade!: GradeEffect;
-  tiltPass!: EffectPass;
+  private fxPass: EffectPass | null = null;
+  private tone!: ToneMappingEffect;
+  private vignette!: VignetteEffect;
+  private camera!: THREE.PerspectiveCamera;
   quality: QualityName = 'high';
   preset: Preset = PRESETS.high;
   /** dynamic resolution: fraction of the preset's max pixel ratio */
@@ -78,15 +81,14 @@ export class Renderer {
     this.preset = PRESETS[quality];
     this.composer = new EffectComposer(this.renderer, { frameBufferType: THREE.HalfFloatType, multisampling: this.preset.msaa });
     this.composer.addPass(new RenderPass(scene, camera));
+    this.camera = camera;
     this.bloom = new BloomEffect({ intensity: 0.85, luminanceThreshold: 0.82, luminanceSmoothing: 0.25, mipmapBlur: true, radius: 0.7 });
+    // fewer mip levels: same look at a fraction of the cost
+    (this.bloom as unknown as { mipmapBlurPass: { levels: number } }).mipmapBlurPass.levels = 5;
     this.grade = new GradeEffect();
     this.tilt = new TiltShiftEffect({ focusArea: 0.62, feather: 0.36, offset: 0.04, kernelSize: KernelSize.SMALL, resolutionScale: 0.4 });
-    const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-    const vignette = new VignetteEffect({ darkness: 0.38, offset: 0.32 });
-    this.composer.addPass(new EffectPass(camera, this.bloom));
-    this.tiltPass = new EffectPass(camera, this.tilt);
-    this.composer.addPass(this.tiltPass);
-    this.composer.addPass(new EffectPass(camera, this.grade, tone, vignette));
+    this.tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
+    this.vignette = new VignetteEffect({ darkness: 0.38, offset: 0.32 });
     this.applyQuality(quality);
   }
 
@@ -96,17 +98,26 @@ export class Renderer {
     this.dynScale = 1;
     this.renderer.setPixelRatio(this.targetDpr());
     this.composer.multisampling = this.preset.msaa;
-    this.tiltPass.enabled = this.preset.tilt;
+    this.buildFxPass();
     this.resize();
+  }
+
+  /** All post effects merged into a single full-screen pass (tilt-shift first, so bloom survives the blur). */
+  private buildFxPass() {
+    if (this.fxPass) this.composer.removePass(this.fxPass);
+    const fx = this.preset.tilt
+      ? [this.tilt, this.bloom, this.grade, this.tone, this.vignette]
+      : [this.bloom, this.grade, this.tone, this.vignette];
+    this.fxPass = new EffectPass(this.camera, ...fx);
+    this.composer.addPass(this.fxPass);
   }
 
   targetDpr() { return Math.max(0.75, Math.min(window.devicePixelRatio, this.preset.dpr) * this.dynScale); }
 
-  /** Nudge the render resolution to hold the frame rate. Returns true if it changed. */
-  adaptResolution(avgMs: number) {
+  /** Step the render resolution down/up (called *before* rendering a frame so there's never a blank one). */
+  setDynScale(scale: number) {
     const before = this.dynScale;
-    if (avgMs > 19) this.dynScale = Math.max(0.55, this.dynScale - 0.08);
-    else if (avgMs < 14.5) this.dynScale = Math.min(1, this.dynScale + 0.04);
+    this.dynScale = Math.min(1, Math.max(0.6, scale));
     if (Math.abs(before - this.dynScale) < 1e-3) return false;
     const pr = this.targetDpr();
     if (Math.abs(pr - this.renderer.getPixelRatio()) < 0.02) return false;

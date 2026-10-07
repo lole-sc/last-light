@@ -124,6 +124,8 @@ export class Foliage {
     this.buildRocksAndBushes();
     this.buildFlowers();
     this.buildGrass();
+    // all foliage is static: bake the transforms once
+    this.group.traverse((o) => { o.matrixAutoUpdate = false; o.updateMatrix(); });
     return this.group;
   }
 
@@ -369,8 +371,8 @@ export class Foliage {
   // ---------------------------------------------------------------- grass
   private buildGrass() {
     // One clump = 5 tapered blades fanned around the origin.
-    const blades = 5;
-    const segs = 3;
+    const blades = 4;
+    const segs = 2;
     const vPerBlade = (segs + 1) * 2 - 1;
     const posArr: number[] = [], colArr: number[] = [], idxArr: number[] = [];
     const r2 = mulberry32(77);
@@ -378,7 +380,7 @@ export class Foliage {
       const a = (b / blades) * Math.PI * 2 + r2() * 0.8;
       const ox = Math.cos(a) * 0.14, oz = Math.sin(a) * 0.14;
       const h = 0.36 + r2() * 0.3;
-      const w = 0.11 + r2() * 0.05;
+      const w = 0.13 + r2() * 0.05;
       const lean = 0.12 + r2() * 0.16;
       const rot = a + Math.PI / 2 + (r2() - 0.5);
       const base = posArr.length / 3;

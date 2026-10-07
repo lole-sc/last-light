@@ -11,10 +11,11 @@ import { mulberry32 } from '../utils/math';
 
 const WOOD = 0xa96f4b, WOOD_D = 0x77493a;
 
-interface Plank { body: RAPIER.RigidBody; mesh: THREE.Object3D; t: number; base: THREE.Vector3; }
+interface Plank { body: RAPIER.RigidBody; t: number; base: THREE.Vector3; }
 
 export class RopeBridge {
   planks: Plank[] = [];
+  deck!: THREE.InstancedMesh;
   ropes!: THREE.InstancedMesh;
   load = 0;
   loadT = -1;
@@ -44,23 +45,25 @@ export class RopeBridge {
       .add(box(0.12, 0.05, 0.52), 0x3a3346, M(this.width / 2 - 0.25, 0.07, 0))
       .add(box(0.12, 0.05, 0.52), 0x3a3346, M(-this.width / 2 + 0.25, 0.07, 0))
       .build();
-    const geos = [plankGeo(0), plankGeo(1)];
+    // one instanced draw for the whole deck (tinted per plank)
+    this.deck = new THREE.InstancedMesh(plankGeo(1), MAT.std, n);
+    this.deck.castShadow = true; this.deck.receiveShadow = true;
+    this.deck.frustumCulled = false;
+    group.add(this.deck);
+    const tint = new THREE.Color();
     for (let i = 0; i < n; i++) {
       const t = (i + 0.5) / n;
       const p = this.a.clone().lerp(this.b, t);
       p.y -= Math.sin(t * Math.PI) * 0.45;
-      const m = new THREE.Mesh(geos[i % 3 ? 1 : 0], MAT.std);
-      m.castShadow = true; m.receiveShadow = true;
-      m.position.copy(p);
-      m.rotation.set(0, this.yaw + (r() - 0.5) * 0.03, 0);
-      group.add(m);
+      tint.setScalar(i % 3 ? 1 : 0.86).offsetHSL(0, 0, (r() - 0.5) * 0.06);
+      this.deck.setColorAt(i, tint);
       const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
       const body = physics.world.createRigidBody(
         RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(p.x, p.y, p.z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }),
       );
       const c = physics.world.createCollider(RAPIER.ColliderDesc.cuboid(this.width / 2, 0.08, 0.36).setFriction(1.0), body);
       physics.tag(c, 'plank');
-      this.planks.push({ body, mesh: m, t, base: p.clone() });
+      this.planks.push({ body, t, base: p.clone() });
     }
     // end posts + lanterns
     for (const [p, sgn] of [[this.a, 1], [this.b, -1]] as [THREE.Vector3, number][]) {
@@ -111,7 +114,11 @@ export class RopeBridge {
     return -1;
   }
 
+  private settled = false;
   update(dt: number, time: number, carPos: THREE.Vector3 | null) {
+    // far away and unloaded: nothing to simulate or redraw
+    if (this.settled && this.load === 0 && (!carPos || carPos.distanceTo(this.mid) > 70)) return;
+    this.settled = true;
     const target = carPos ? this.project(carPos) : -1;
     if (target >= 0) {
       if (this.loadT < 0 || this.load < 0.05) this.wobble = 1;
@@ -120,8 +127,9 @@ export class RopeBridge {
     } else this.load = Math.max(0, this.load - dt * 1.5);
     this.wobble = Math.max(0, this.wobble - dt * 0.35);
     const pts: THREE.Vector3[] = [];
-    const q = new THREE.Quaternion(), e = new THREE.Euler();
-    for (const p of this.planks) {
+    const q = new THREE.Quaternion(), e = new THREE.Euler(), pm = new THREE.Matrix4(), one = new THREE.Vector3(1, 1, 1);
+    for (let i = 0; i < this.planks.length; i++) {
+      const p = this.planks[i];
       const t = p.t;
       const env = Math.sin(t * Math.PI);
       const sag = this.load * 0.7 * Math.exp(-(((t - this.loadT) / 0.22) ** 2)) * env;
@@ -135,8 +143,7 @@ export class RopeBridge {
       pos.y = y;
       e.set(0, this.yaw, roll, 'YXZ');
       q.setFromEuler(e);
-      p.mesh.position.copy(pos);
-      p.mesh.quaternion.copy(q);
+      this.deck.setMatrixAt(i, pm.compose(pos, q, one));
       pts.push(pos);
     }
     const m = new THREE.Matrix4(), fwd = new THREE.Vector3(0, 0, 1), rq = new THREE.Quaternion(), sc = new THREE.Vector3();
@@ -159,6 +166,7 @@ export class RopeBridge {
         prev = rail;
       }
     }
+    this.deck.instanceMatrix.needsUpdate = true;
     this.ropes.count = k;
     this.ropes.instanceMatrix.needsUpdate = true;
   }

@@ -16,7 +16,7 @@ import type { Physics } from '../core/physics';
 const WOOD = 0xa96f4b, WOOD_D = 0x77493a, STONE = 0xc2b5bd, STONE_D = 0x948aa5, IRON = 0x3a3346;
 const CREAM = 0xf5e6cc, CORAL = 0xe8634e, TEAL = 0x2f7f86, PLUM = 0x7c4a5e, MOSS = 0x76a35a;
 
-export interface Lamp { bulb: THREE.Mesh; pool: THREE.Mesh; x: number; z: number; on: number; target: number; }
+export interface Lamp { x: number; z: number; y: number; size: number; normal: THREE.Vector3; on: number; target: number; }
 export interface Mushroom { cap: THREE.Object3D; x: number; z: number; top: number; r: number; squash: number; }
 
 function lightPoolTexture() {
@@ -113,6 +113,10 @@ export class Structures {
     statMesh.castShadow = true;
     statMesh.receiveShadow = true;
     this.group.add(statMesh);
+    this.buildLampInstances();
+    // nothing in here moves on its own unless we animate it explicitly
+    statMesh.matrixAutoUpdate = false;
+    statMesh.updateMatrix();
     return this.group;
   }
 
@@ -547,12 +551,8 @@ export class Structures {
       this.stat.add(cone(0.32, 0.3, 4), IRON, M(x, y + 2.72, z, 0, Math.PI / 4, 0));
       this.physics.cylFixed(x, y + 1.0, z, 0.1, 1.0, 'lamp');
     }
-    const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.5, 0.34), MAT.lamp.clone());
-    bulb.position.set(x, y + (porch ? 2.3 : 3.36), z);
-    this.group.add(bulb);
-    const pool = makeLightPool(x, z, porch ? 5 : 7.5);
-    this.group.add(pool);
-    this.lamps.push({ bulb, pool, x, z, on: 0, target: 0 });
+    // bulbs and light pools are drawn as two instanced meshes (built in buildLampInstances)
+    this.lamps.push({ x, z, y: y + (porch ? 2.3 : 3.36), size: porch ? 5 : 7.5, normal: groundNormal(x, z), on: 0, target: 0 });
   }
 
   private lampPosts() {
@@ -808,18 +808,47 @@ export class Structures {
   }
 
   /** windows & lamps react to the night amount and lit beacons */
+  private bulbs!: THREE.InstancedMesh;
+  private pools!: THREE.InstancedMesh;
+  private buildLampInstances() {
+    const n = this.lamps.length;
+    this.bulbs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.5, 0.34), new THREE.MeshBasicMaterial({ color: 0xffffff }), n);
+    const poolGeo = new THREE.PlaneGeometry(1, 1);
+    this.pools = new THREE.InstancedMesh(poolGeo, new THREE.MeshBasicMaterial({ map: POOL_TEX, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: true }), n);
+    this.pools.renderOrder = 5;
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), zAxis = new THREE.Vector3(0, 0, 1);
+    this.lamps.forEach((l, i) => {
+      this.bulbs.setMatrixAt(i, m.makeTranslation(l.x, l.y, l.z));
+      q.setFromUnitVectors(zAxis, l.normal);
+      m.compose(new THREE.Vector3(l.x, groundHeight(l.x, l.z) + 0.08, l.z), q, new THREE.Vector3(l.size, l.size, 1));
+      this.pools.setMatrixAt(i, m);
+      this.bulbs.setColorAt(i, new THREE.Color(0x3a2e2a));
+      this.pools.setColorAt(i, new THREE.Color(0, 0, 0));
+    });
+    for (const im of [this.bulbs, this.pools]) { im.computeBoundingSphere(); im.frustumCulled = true; }
+    this.group.add(this.bulbs, this.pools);
+  }
+
   updateLights(dt: number, night: number) {
     MAT.lamp.emissiveIntensity = 0.15 + night * 2.6;
     for (const p of this.pinwheels) p.children[0].rotation.z += dt * p.userData.speed;
-    for (const l of this.lamps) {
+    const now = performance.now();
+    const off = LAMP_OFF, warm = LAMP_WARM, pool = LAMP_POOL, c = LAMP_TMP;
+    for (let i = 0; i < this.lamps.length; i++) {
+      const l = this.lamps[i];
       const target = Math.max(l.target, smooth01(night));
       l.on += (target - l.on) * Math.min(1, dt * 2.5);
-      const flick = 1 + Math.sin(performance.now() * 0.013 + l.x) * 0.03;
-      (l.bulb.material as THREE.MeshStandardMaterial).emissiveIntensity = (0.15 + l.on * 3.2) * flick;
-      (l.pool.material as THREE.MeshBasicMaterial).opacity = l.on * 0.55 * flick;
+      const flick = 1 + Math.sin(now * 0.013 + l.x) * 0.03;
+      c.copy(off).lerp(warm, Math.min(1, l.on * 1.4)).multiplyScalar(0.6 + l.on * 3.0 * flick);
+      this.bulbs.setColorAt(i, c);
+      this.pools.setColorAt(i, c.copy(pool).multiplyScalar(l.on * 0.55 * flick));
     }
+    this.bulbs.instanceColor!.needsUpdate = true;
+    this.pools.instanceColor!.needsUpdate = true;
   }
 }
+
+const LAMP_OFF = new THREE.Color(0x3a2e2a), LAMP_WARM = new THREE.Color(0xffb35c), LAMP_POOL = new THREE.Color(0xffa850), LAMP_TMP = new THREE.Color();
 
 function smooth01(x: number) {
   const t = Math.min(1, Math.max(0, (x - 0.05) / 0.6));

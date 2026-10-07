@@ -406,14 +406,14 @@ export class Vehicle {
     this.ctrl.setWheelSteering(1, this.steer);
 
     // ---- engine & brakes
-    const maxFwd = this.boosting ? 38 : 22;
+    const maxFwd = this.boosting ? 29 : 22;
     let engine = 0, brake = 0;
     if (fwdIn > 0) {
       if (this.speed < -1.5) brake = 0.6;
-      else engine = (this.boosting ? 215 : 95) * Math.max(0, 1 - Math.pow(Math.max(0, this.speed) / maxFwd, 2.4));
+      else engine = (this.boosting ? 140 : 95) * Math.max(0, 1 - Math.pow(Math.max(0, this.speed) / maxFwd, 2.4));
     } else if (fwdIn < 0) {
       if (this.speed > 1.5) brake = 0.8;
-      else engine = -(inp.boost ? 110 : 60) * Math.max(0, 1 - Math.pow(Math.max(0, -this.speed) / (inp.boost ? 16 : 10), 2));
+      else engine = -(inp.boost ? 85 : 60) * Math.max(0, 1 - Math.pow(Math.max(0, -this.speed) / (inp.boost ? 13 : 10), 2));
     } else {
       // coast gently at speed, hold firm on slopes when nearly stopped
       brake = lerp(1.4, 0.07, clamp(absV / 5, 0, 1));
@@ -428,9 +428,9 @@ export class Vehicle {
     // boost kick: a satisfying shove the moment you hit it
     this.boostKick = Math.max(0, this.boostKick - dt);
     if (this.boosting && !this.wasBoost && this.grounded >= 2) {
-      c.applyImpulse({ x: fwd.x * 42, y: 6, z: fwd.z * 42 }, true);
+      c.applyImpulse({ x: fwd.x * 16, y: 0, z: fwd.z * 16 }, true);
       this.boostKick = 0.6;
-      this.squashV -= 3;
+      this.squashV -= 1.5;
     }
     this.wasBoost = this.boosting;
 
