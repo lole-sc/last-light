@@ -1,0 +1,10 @@
+// Cloudflare (Workers static assets). Build: npm run build -> dist/.
+{
+  "$schema": "https://unpkg.com/wrangler@4.149.0/config-schema.json",
+  "name": "lastlight",
+  "compatibility_date": "2026-10-01",
+  "build": { "command": "npm run build" },
+  "assets": {
+    "directory": "./dist"
+  }
+}
